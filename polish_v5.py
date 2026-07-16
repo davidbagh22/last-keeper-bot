@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 import app as game
+import legend_engine
 import production_v6
 import v6_aliases
 from game_data import TEAM_COLORS
@@ -79,12 +80,12 @@ async def compact_admin(message: Message) -> None:
 
 
 @router.message(Command('mission'))
-@router.message(F.text.in_({'◻️ Эффект бабочки', '🦋 Состояние Архива', '🦋 Эффект бабочки'}))
+@router.message(F.text.in_({'◻️ Эффект бабочки', '🦋 Состояние Архива', '🦋 Эффект бабочки', '◻️ Моя легенда', '🦋 Моя легенда'}))
 async def final_message(message: Message) -> None:
-    await production_v6.final_report(message, message.from_user.id)
+    await legend_engine.reveal_final(message, message.from_user.id)
 
 
 @router.callback_query(F.data.in_({'v4:mission', 'progress:final'}))
 async def final_callback(callback: CallbackQuery) -> None:
     await callback.answer()
-    await production_v6.final_report(callback.message, callback.from_user.id)
+    await legend_engine.reveal_final(callback.message, callback.from_user.id)
