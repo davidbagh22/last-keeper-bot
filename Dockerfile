@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["sh", "-c", "export WEBHOOK_SECRET=$(printf '%s' \"${WEBHOOK_SECRET:-lastkeeper}\" | sha256sum | cut -d' ' -f1); exec uvicorn main:web --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn main:web --host 0.0.0.0 --port ${PORT:-8000}"]
