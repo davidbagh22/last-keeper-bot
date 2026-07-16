@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, Update
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
+import admin_access
 import admin_tools
 import app as game
 import expert_ux
@@ -44,8 +45,7 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
-    # Сначала подключается жёсткий командный маршрут: ручная выдача команд,
-    # цифровые коды и 50 уникальных игр. Затем - партнёры, демо и сервисные сценарии.
+    dispatcher.include_router(admin_access.router)
     dispatcher.include_router(team_quest.router)
     dispatcher.include_router(partners.router)
     dispatcher.include_router(expert_ux.router)
@@ -78,7 +78,7 @@ async def configure_telegram() -> None:
                 with suppress(Exception):
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
-                        BotCommand(command='admin', description='Выдать команды и проверить маршрут'),
+                        BotCommand(command='admin', description='Постоянная панель управления'),
                         BotCommand(command='games', description='Игры команды'),
                         BotCommand(command='partners', description='Партнёры проекта'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
@@ -119,7 +119,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='3.1.0',
+    version='3.2.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
