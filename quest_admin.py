@@ -41,8 +41,17 @@ async def send_admin_panel(target: Message) -> None:
             ('🎨 Выдать команду', 'tq:admin:queue'),
             ('🔢 Коды живых локаций', 'tq:admin:codes'),
             ('📊 Прогресс команд', 'tq:admin:teams'),
+            ('⚙️ Все функции Архивариуса', 'tq:admin:legacy'),
         ]),
     )
+
+
+@router.callback_query(F.data == 'tq:admin:legacy')
+async def legacy_admin_panel(callback: CallbackQuery) -> None:
+    if not await game.is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await game.show_admin_panel(callback.message)
 
 
 @router.callback_query(F.data == 'tq:admin:queue')
