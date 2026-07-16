@@ -1,202 +1,59 @@
 from __future__ import annotations
 
-import asyncio
 import csv
 import html
 import io
 import json
 import logging
-import os
-import secrets
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from pathlib import Path
+from collections import defaultdict
 from typing import Any
 
 import aiosqlite
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
-    Update,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from fastapi import FastAPI, HTTPException, Request
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+from config import load_settings
+from game_data import (
+    LOCATIONS,
+    OPEN_SPACES,
+    PARAMETER_LABELS,
+    PROGRAM_DAY,
+    ROUTES,
+    TEAM_COLORS,
+    TIME_SLOTS,
+    WORKSHOPS,
+    empty_parameters,
+    final_archetype,
+    format_event_date,
+    route_lines,
 )
-log = logging.getLogger("last_keeper")
+from storage import Database, utcnow
 
+settings = load_settings()
+db = Database(settings.database_path)
+router = Router(name='last_keeper')
+log = logging.getLogger('last_keeper.bot')
 
-class Settings:
-    bot_token = os.getenv("BOT_TOKEN", "").strip()
-    admin_ids_raw = os.getenv("ADMIN_IDS", "1593868942")
-    database_path = os.getenv("DATABASE_PATH", "/tmp/last_keeper.db")
-    event_dates_raw = os.getenv("EVENT_DATES", "2026-11-16,2026-11-17")
-    team_capacity = int(os.getenv("TEAM_CAPACITY", "30"))
-    public_base_url = (
-        os.getenv("PUBLIC_BASE_URL", "").strip()
-        or os.getenv("RENDER_EXTERNAL_URL", "").strip()
-    ).rstrip("/")
-    webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip() or secrets.token_urlsafe(24)
-    culture_code = os.getenv("LOCATION_CODE_CULTURE", "CULT26").strip()
-    science_code = os.getenv("LOCATION_CODE_SCIENCE", "SCI26").strip()
-    history_code = os.getenv("LOCATION_CODE_HISTORY", "HIST26").strip()
-    memory_code = os.getenv("LOCATION_CODE_MEMORY", "MEM26").strip()
-
-    @property
-    def admin_ids(self) -> set[int]:
-        return {
-            int(value.strip())
-            for value in self.admin_ids_raw.split(",")
-            if value.strip().isdigit()
-        }
-
-    @property
-    def event_dates(self) -> list[str]:
-        return [
-            value.strip()
-            for value in self.event_dates_raw.split(",")
-            if value.strip()
-        ]
-
-
-settings = Settings()
-DB = settings.database_path
-router = Router()
-
-TEAM_COLORS = ["Красные", "Белые", "Оранжевые", "Зелёные", "Синие"]
-
-LOCATIONS: dict[str, dict[str, Any]] = {
-    "culture": {
-        "title": "Код культуры",
-        "place": "Библиотека, 3 этаж",
-        "code": settings.culture_code,
-        "question": "Что должна сохранить команда?",
-        "intro": (
-            "Архив сохранил древний символ, но утратил объяснение его смысла.\n\n"
-            "Можно сохранить привычную форму, которую узнают поколения, "
-            "или передать её смысл новым языком."
-        ),
-        "choices": [
-            (
-                "culture_form",
-                "Сохранить исходную форму",
-                {"memory": 2, "truth": 1, "progress": -1},
-                "Символ сохранён без изменений. Архив стал точнее, но его язык оказался понятен не каждому.",
-            ),
-            (
-                "culture_new",
-                "Передать смысл новым языком",
-                {"unity": 2, "progress": 1, "truth": -1},
-                "Символ заговорил с новым поколением. Но часть первоначальных деталей растворилась в переводе.",
-            ),
-        ],
-    },
-    "science": {
-        "title": "Цена открытия",
-        "place": "Лофт №1, 2 этаж",
-        "code": settings.science_code,
-        "question": "Как поступит команда?",
-        "intro": (
-            "Российское открытие готово изменить жизнь людей. "
-            "Дополнительная проверка задержит его применение, "
-            "но может предотвратить неизвестные последствия."
-        ),
-        "choices": [
-            (
-                "science_now",
-                "Открыть доступ сейчас",
-                {"progress": 2, "unity": 1, "responsibility": -1},
-                "Открытие вышло за стены лаборатории. Мир получил новую возможность раньше, чем успел понять её цену.",
-            ),
-            (
-                "science_check",
-                "Остановиться и проверить",
-                {"responsibility": 2, "truth": 1, "progress": -1},
-                "Открытие осталось под защитой Архива. Риск уменьшился, но часть времени была потеряна.",
-            ),
-        ],
-    },
-    "history": {
-        "title": "Выбор эпохи",
-        "place": "Выставочный зал, 1 этаж",
-        "code": settings.history_code,
-        "question": "Что выберет команда?",
-        "intro": (
-            "Найден документ, способный изменить привычное понимание исторического события. "
-            "Его публикация восстановит часть истины, но нарушит сложившееся представление о прошлом."
-        ),
-        "choices": [
-            (
-                "history_old",
-                "Сохранить прежнюю версию",
-                {"memory": 2, "unity": 1, "truth": -1},
-                "История сохранила знакомый облик. Но одна страница Архива осталась закрытой.",
-            ),
-            (
-                "history_open",
-                "Открыть найденное свидетельство",
-                {"truth": 2, "responsibility": 1, "unity": -1},
-                "Свидетельство возвращено в Архив. История стала полнее, но спокойствие оказалось нарушено.",
-            ),
-        ],
-    },
-    "memory": {
-        "title": "Голоса памяти",
-        "place": "Лофт №2, 2 этаж",
-        "code": settings.memory_code,
-        "question": "Что должно остаться для будущих поколений?",
-        "intro": (
-            "В Архиве сохранились два рассказа об одном событии. "
-            "Один точен и подтверждён документами. Второй передаёт личную боль, но содержит расхождения."
-        ),
-        "choices": [
-            (
-                "memory_fact",
-                "Сохранить подтверждённый рассказ",
-                {"truth": 2, "memory": 1, "unity": -1},
-                "Архив сохранил точность. Но один человеческий голос исчез между строками.",
-            ),
-            (
-                "memory_both",
-                "Сохранить оба голоса с пояснением",
-                {"responsibility": 2, "unity": 1, "memory": 1},
-                "Архив сохранил не только факт, но и переживание. Будущим Хранителям придётся различать документ и память человека.",
-            ),
-        ],
-    },
+CATEGORY_LABELS = {
+    'route': 'Маршрут и локация',
+    'code': 'Код не работает',
+    'team': 'Команда или капитан',
+    'health': 'Самочувствие и безопасность',
+    'other': 'Другой вопрос',
 }
 
-ROUTES = {
-    "Красные": ["culture", "science", "history", "memory", "open"],
-    "Белые": ["science", "history", "memory", "open", "culture"],
-    "Оранжевые": ["history", "memory", "open", "culture", "science"],
-    "Зелёные": ["memory", "open", "culture", "science", "history"],
-    "Синие": ["open", "culture", "science", "history", "memory"],
-}
 
-TIME_SLOTS = [
-    "11:00–11:40",
-    "11:40–12:20",
-    "12:20–13:00",
-    "13:00–13:40",
-    "13:40–14:15",
-]
-
-
-class Reg(StatesGroup):
+class Registration(StatesGroup):
     consent = State()
     name = State()
     age = State()
@@ -204,1034 +61,1260 @@ class Reg(StatesGroup):
     date = State()
 
 
-class CaptainFlow(StatesGroup):
+class LocationFlow(StatesGroup):
     code = State()
-    confirm = State()
+    choice = State()
 
 
 class SupportFlow(StatesGroup):
     text = State()
 
 
-def utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat()
+class AdminFlow(StatesGroup):
+    add_admin = State()
+    broadcast = State()
+    broadcast_confirm = State()
+    answer_support = State()
 
 
-async def db_exec(query: str, params: tuple[Any, ...] = ()) -> None:
-    Path(DB).parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(DB) as db:
-        await db.execute(query, params)
-        await db.commit()
+async def init_application() -> None:
+    await db.init()
 
 
-async def db_one(query: str, params: tuple[Any, ...] = ()):
-    async with aiosqlite.connect(DB) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(query, params)
-        return await cursor.fetchone()
+async def database_admin_ids() -> set[int]:
+    rows = await db.all('SELECT telegram_id FROM admin_users')
+    return {int(row['telegram_id']) for row in rows}
 
 
-async def db_all(query: str, params: tuple[Any, ...] = ()):
-    async with aiosqlite.connect(DB) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(query, params)
-        return await cursor.fetchall()
+async def is_admin(user_id: int) -> bool:
+    if user_id in settings.superadmin_ids:
+        return True
+    row = await db.one('SELECT 1 FROM admin_users WHERE telegram_id = ?', (user_id,))
+    return bool(row)
 
 
-async def init_db() -> None:
-    Path(DB).parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(DB) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users(
-                telegram_id INTEGER PRIMARY KEY,
-                username TEXT NOT NULL DEFAULT '',
-                full_name TEXT NOT NULL,
-                age INTEGER NOT NULL,
-                organization TEXT NOT NULL DEFAULT '',
-                event_date TEXT NOT NULL,
-                team TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'participant',
-                checked_in INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS team_choices(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_date TEXT NOT NULL,
-                team TEXT NOT NULL,
-                location_key TEXT NOT NULL,
-                choice_code TEXT NOT NULL,
-                selected_by INTEGER NOT NULL,
-                effects_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(event_date, team, location_key)
-            )
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS support_requests(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                category TEXT NOT NULL,
-                message TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings(
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        await db.execute(
-            "INSERT OR IGNORE INTO settings(key, value) VALUES('final_open', '0')"
-        )
-        await db.commit()
+def is_superadmin(user_id: int) -> bool:
+    return user_id in settings.superadmin_ids
 
 
-def inline_buttons(items: list[tuple[str, str]]):
-    builder = InlineKeyboardBuilder()
-    for text, data in items:
-        builder.button(text=text, callback_data=data)
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="Следующая точка"),
-                KeyboardButton(text="Мой маршрут"),
-            ],
-            [
-                KeyboardButton(text="Состояние Архива"),
-                KeyboardButton(text="Мои фрагменты"),
-            ],
-            [
-                KeyboardButton(text="Позвать Архивариуса"),
-                KeyboardButton(text="Правила"),
-            ],
-        ],
-        resize_keyboard=True,
-    )
-
-
-async def get_user(telegram_id: int):
-    return await db_one(
-        "SELECT * FROM users WHERE telegram_id = ?",
-        (telegram_id,),
-    )
+async def get_user(user_id: int):
+    return await db.one('SELECT * FROM users WHERE telegram_id = ?', (user_id,))
 
 
 async def require_user(message: Message):
     user = await get_user(message.from_user.id)
     if not user:
-        await message.answer("Сначала отправь /start и заверши регистрацию.")
+        await message.answer('Архив пока не знает тебя. Отправь /start и пройди регистрацию.')
+        return None
     return user
 
 
+def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text='Следующая точка'), KeyboardButton(text='Программа')],
+        [KeyboardButton(text='Мой прогресс'), KeyboardButton(text='Игровой Архив')],
+        [KeyboardButton(text='Задать вопрос')],
+    ]
+    if admin:
+        keyboard.append([KeyboardButton(text='Панель Архивариуса')])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def inline_buttons(items: list[tuple[str, str]], columns: int = 1):
+    builder = InlineKeyboardBuilder()
+    for text, data in items:
+        builder.button(text=text, callback_data=data)
+    builder.adjust(columns)
+    return builder.as_markup()
+
+
+def escape(value: Any) -> str:
+    return html.escape(str(value or ''))
+
+
+async def team_choices(event_date: str, team: str):
+    return await db.all(
+        'SELECT * FROM team_choices WHERE event_date = ? AND team = ? ORDER BY id',
+        (event_date, team),
+    )
+
+
+async def team_parameters(event_date: str, team: str) -> dict[str, int]:
+    values = empty_parameters()
+    for row in await team_choices(event_date, team):
+        for key, amount in json.loads(row['effects_json']).items():
+            if key in values:
+                values[key] += int(amount)
+    return values
+
+
 async def assign_team(event_date: str) -> str:
-    counts = {color: 0 for color in TEAM_COLORS}
-    rows = await db_all(
-        """
-        SELECT team, COUNT(*) AS total
-        FROM users
-        WHERE event_date = ?
-        GROUP BY team
-        """,
+    rows = await db.all(
+        '''SELECT team, COUNT(*) AS amount
+           FROM users WHERE event_date = ? GROUP BY team''',
         (event_date,),
     )
+    counts = {team: 0 for team in TEAM_COLORS}
     for row in rows:
-        counts[row["team"]] = row["total"]
-    available = [
-        color
-        for color in TEAM_COLORS
-        if counts[color] < settings.team_capacity
-    ]
-    return min(available or TEAM_COLORS, key=lambda color: counts[color])
+        if row['team'] in counts:
+            counts[row['team']] = int(row['amount'])
+    available = [team for team in TEAM_COLORS if counts[team] < settings.team_capacity]
+    return min(available or TEAM_COLORS, key=lambda team: (counts[team], TEAM_COLORS.index(team)))
 
 
-async def get_team_choices(user) -> list:
-    return await db_all(
-        """
-        SELECT *
-        FROM team_choices
-        WHERE event_date = ? AND team = ?
-        ORDER BY id
-        """,
-        (user["event_date"], user["team"]),
-    )
-
-
-async def team_parameters(user) -> dict[str, int]:
-    result = {
-        "memory": 0,
-        "truth": 0,
-        "unity": 0,
-        "progress": 0,
-        "responsibility": 0,
+async def current_route_key(user) -> tuple[int, str] | None:
+    completed_choices = {
+        row['location_key'] for row in await team_choices(user['event_date'], user['team'])
     }
-    for row in await get_team_choices(user):
-        for key, value in json.loads(row["effects_json"]).items():
-            result[key] += value
-    return result
-
-
-def final_archetype(parameters: dict[str, int]) -> tuple[str, str]:
-    values = list(parameters.values())
-    average = sum(values) / len(values)
-
-    if (
-        max(values) - min(values) <= 2
-        and parameters["responsibility"] >= average
-    ):
-        return (
-            "Общее наследие",
-            "Вы не пытались сохранить прошлое неподвижным и не позволили ему раствориться в переменах. Ваш Архив стал живым общим наследием.",
-        )
-    if parameters["responsibility"] == max(values):
-        return (
-            "Архив ответственности",
-            "Вы не искали простых ответов. Ваш Архив хранит не только события, но и цену решений.",
-        )
-    if (
-        parameters["unity"] >= 3
-        and parameters["progress"] >= 2
-        and parameters["truth"] < max(parameters["unity"], parameters["progress"])
-    ):
-        return (
-            "Живой архив",
-            "Вы сделали память понятной и близкой людям. Архив заговорил живым языком, но часть деталей изменилась при передаче.",
-        )
-    if (
-        parameters["memory"] >= 3
-        and parameters["truth"] >= 3
-        and parameters["unity"] <= 1
-    ):
-        return (
-            "Закрытый архив",
-            "Вы сохранили точность документов и силу свидетельств. Архив уцелел, но стал закрытым.",
-        )
-    return (
-        "Холодный прогресс",
-        "Вы открыли Архив будущему. Он стал быстрым и технологичным, но в нём осталось меньше человеческого голоса и осторожности.",
+    marks = await db.all(
+        'SELECT route_key FROM route_marks WHERE event_date = ? AND team = ?',
+        (user['event_date'], user['team']),
     )
+    completed = completed_choices | {row['route_key'] for row in marks}
+    for index, key in enumerate(ROUTES[user['team']]):
+        if key not in completed:
+            return index, key
+    return None
 
 
-def format_event_date(value: str) -> str:
-    try:
-        return datetime.fromisoformat(value).strftime("%d.%m.%Y")
-    except ValueError:
-        return value
+async def notify_team(bot: Bot, user, text: str) -> None:
+    rows = await db.all(
+        '''SELECT telegram_id FROM users
+           WHERE event_date = ? AND team = ? AND telegram_id <> ?''',
+        (user['event_date'], user['team'], user['telegram_id']),
+    )
+    for row in rows:
+        try:
+            await bot.send_message(row['telegram_id'], text)
+        except Exception:
+            log.warning('Could not notify user %s', row['telegram_id'], exc_info=True)
+
+
+async def admin_recipients() -> set[int]:
+    return settings.superadmin_ids | await database_admin_ids()
 
 
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     user = await get_user(message.from_user.id)
     if user:
-        await state.clear()
+        role = 'капитан' if user['role'] == 'captain' else 'Хранитель'
         await message.answer(
-            f"Архив узнал тебя, <b>{html.escape(user['full_name'])}</b>.\n"
-            f"Команда: <b>{html.escape(user['team'])}</b>.",
-            reply_markup=main_menu(),
+            '<b>Архив узнал тебя.</b>\n\n'
+            f'{role}: <b>{escape(user["full_name"])}</b>\n'
+            f'Команда: <b>{escape(user["team"])}</b>\n'
+            f'День: {format_event_date(user["event_date"])}\n\n'
+            'Каждый восстановленный фрагмент меняет не маршрут, а то, каким станет финальный Архив.',
+            reply_markup=main_menu(await is_admin(message.from_user.id)),
         )
         return
 
-    await state.set_state(Reg.consent)
+    await state.set_state(Registration.consent)
     await message.answer(
-        "<b>Архив открылся. Но часть его страниц исчезла.</b>\n\n"
-        "Сегодня тебе предстоит стать Хранителем и восстановить то, "
-        "что ещё можно спасти.\n\n"
-        "Чтобы сохранить маршрут, Архиву потребуется имя, возраст и Telegram ID.",
-        reply_markup=inline_buttons(
-            [
-                ("Согласен", "consent:yes"),
-                ("Не согласен", "consent:no"),
-            ]
-        ),
+        '<b>Архив открылся. Но часть его страниц исчезла.</b>\n\n'
+        'Слова, культурные символы, научные открытия и человеческие голоса ещё можно вернуть. '
+        'Сегодня ты входишь не в викторину, а в историю, где решение оставляет след.\n\n'
+        'Для маршрута Архиву потребуются имя, возраст и Telegram ID. Данные используются только для организации проекта.',
+        reply_markup=inline_buttons([
+            ('Войти в Архив', 'reg:yes'),
+            ('Не сейчас', 'reg:no'),
+        ]),
     )
 
 
-@router.callback_query(Reg.consent, F.data.startswith("consent:"))
-async def consent(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(Registration.consent, F.data.startswith('reg:'))
+async def registration_consent(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    if callback.data.endswith("no"):
-        await callback.message.edit_text(
-            "Без согласия Архив не сможет сохранить твой маршрут."
-        )
+    if callback.data == 'reg:no':
         await state.clear()
+        await callback.message.edit_text('Архив закрыл запись. Вернуться можно командой /start.')
         return
-
-    await state.set_state(Reg.name)
+    await state.update_data(consent_at=utcnow())
+    await state.set_state(Registration.name)
     await callback.message.edit_text(
-        "<b>Как записать тебя в Книгу Хранителей?</b>\n"
-        "Укажи имя и фамилию."
+        '<b>Как записать тебя в Книгу Хранителей?</b>\nУкажи имя и фамилию.'
     )
 
 
-@router.message(Reg.name)
+@router.message(Registration.name)
 async def registration_name(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
+    value = ' '.join((message.text or '').split())
     if len(value.split()) < 2 or len(value) > 100:
-        await message.answer("Укажи имя и фамилию. Например: Анна Иванова.")
+        await message.answer('Нужно указать имя и фамилию. Например: Анна Петрова.')
         return
     await state.update_data(full_name=value)
-    await state.set_state(Reg.age)
+    await state.set_state(Registration.age)
     await message.answer(
-        "<b>Сколько тебе лет?</b>\n"
-        "Основной маршрут создан для участников от 16 до 26 лет."
+        '<b>Сколько тебе лет?</b>\nОсновной маршрут создан для участников от 16 до 26 лет.'
     )
 
 
-@router.message(Reg.age)
+@router.message(Registration.age)
 async def registration_age(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
+    value = (message.text or '').strip()
     if not value.isdigit() or not 10 <= int(value) <= 99:
-        await message.answer("Введи возраст одним числом.")
+        await message.answer('Введи возраст одним числом.')
         return
-    await state.update_data(age=int(value))
-    await state.set_state(Reg.organization)
+    age = int(value)
+    await state.update_data(age=age, status='confirmed' if 16 <= age <= 26 else 'review')
+    await state.set_state(Registration.organization)
     await message.answer(
-        "<b>Откуда ты пришёл в Архив?</b>\n"
-        "Укажи университет, организацию или напиши «Пропустить»."
+        '<b>Откуда ты пришёл в Архив?</b>\n'
+        'Укажи университет, организацию или молодёжное объединение. Можно написать «Пропустить».'
     )
 
 
-@router.message(Reg.organization)
+@router.message(Registration.organization)
 async def registration_organization(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
-    organization = "" if value.casefold() == "пропустить" else value[:150]
-    await state.update_data(organization=organization)
-    await state.set_state(Reg.date)
-
-    buttons = []
-    for event_date in settings.event_dates:
-        buttons.append((format_event_date(event_date), f"date:{event_date}"))
+    value = ' '.join((message.text or '').split())
+    await state.update_data(organization='' if value.casefold() == 'пропустить' else value[:150])
+    await state.set_state(Registration.date)
+    buttons = [(format_event_date(date), f'date:{date}') for date in settings.event_dates]
     await message.answer(
-        "<b>Выбери день, когда начнётся твой путь.</b>",
+        '<b>Выбери день, когда начнётся твой путь.</b>\n'
+        'Программа повторяется для разных потоков участников.',
         reply_markup=inline_buttons(buttons),
     )
 
 
-@router.callback_query(Reg.date, F.data.startswith("date:"))
+@router.callback_query(Registration.date, F.data.startswith('date:'))
 async def registration_date(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    event_date = callback.data.split(":", 1)[1]
+    event_date = callback.data.split(':', 1)[1]
     if event_date not in settings.event_dates:
-        await callback.message.answer("Этот день больше недоступен. Отправь /start.")
         await state.clear()
+        await callback.message.answer('Этот день больше недоступен. Отправь /start.')
         return
-
     data = await state.get_data()
     team = await assign_team(event_date)
-    role = "admin" if callback.from_user.id in settings.admin_ids else "participant"
-
     try:
-        await db_exec(
-            """
-            INSERT INTO users(
-                telegram_id, username, full_name, age, organization,
-                event_date, team, role, created_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        await db.execute(
+            '''INSERT INTO users(
+                telegram_id, username, full_name, age, organization, event_date,
+                team, role, status, consent_at, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, 'participant', ?, ?, ?)''',
             (
                 callback.from_user.id,
-                callback.from_user.username or "",
-                data["full_name"],
-                data["age"],
-                data["organization"],
+                callback.from_user.username or '',
+                data['full_name'],
+                data['age'],
+                data.get('organization', ''),
                 event_date,
                 team,
-                role,
+                data.get('status', 'confirmed'),
+                data.get('consent_at', utcnow()),
                 utcnow(),
             ),
         )
     except aiosqlite.IntegrityError:
         pass
-
     await state.clear()
+    review_note = (
+        '\nВозраст будет подтверждён организатором вручную.'
+        if data.get('status') == 'review' else ''
+    )
     await callback.message.edit_text(
-        "<b>Запись сохранена.</b>\n"
-        f"Хранитель: {html.escape(data['full_name'])}\n"
-        f"День: {format_event_date(event_date)}\n"
-        f"Команда: <b>{team}</b>"
+        '<b>Запись восстановлена.</b>\n\n'
+        f'Хранитель: {escape(data["full_name"])}\n'
+        f'День: {format_event_date(event_date)}\n'
+        f'Команда: <b>{team}</b>{review_note}'
     )
     await callback.message.answer(
-        "Архив определил твой контур. Не меняй команду самостоятельно.",
-        reply_markup=main_menu(),
+        'Архив определил твой контур. Цвет команды задаёт физический маршрут, '
+        'а ваши решения — финальную версию памяти.',
+        reply_markup=main_menu(await is_admin(callback.from_user.id)),
     )
 
 
-@router.message(F.text == "Мой маршрут")
-async def show_route(message: Message) -> None:
-    user = await require_user(message)
+@router.message(Command('program'))
+@router.message(F.text == 'Программа')
+async def program(message: Message) -> None:
+    await show_program_message(message)
+
+
+async def show_program_message(message: Message) -> None:
+    lines = [
+        '<b>Программа «Последнего хранителя»</b>',
+        'Дом Москвы в Ереване, ул. Аргишти, 7',
+        '16–17 ноября 2026 года',
+        '',
+    ]
+    for time, activity, _ in PROGRAM_DAY:
+        lines.append(f'<b>{time}</b> — {activity}')
+    await message.answer(
+        '\n'.join(lines),
+        reply_markup=inline_buttons([
+            ('Маршрут моей команды', 'program:route'),
+            ('Мастерские', 'program:workshops'),
+            ('Открытые пространства', 'program:spaces'),
+        ]),
+    )
+
+
+@router.callback_query(F.data == 'program:route')
+async def program_route(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user = await get_user(callback.from_user.id)
     if not user:
+        await callback.message.answer('Сначала зарегистрируйся через /start.')
         return
-
-    lines = [f"<b>Маршрут команды «{html.escape(user['team'])}»</b>"]
-    for index, key in enumerate(ROUTES[user["team"]]):
-        if key == "open":
-            title = "Открытые пространства"
-            place = "VR-зона, выставка и фотозона"
-        else:
-            title = LOCATIONS[key]["title"]
-            place = LOCATIONS[key]["place"]
-        lines.append(
-            f"{index + 1}. {TIME_SLOTS[index]} — <b>{title}</b>\n"
-            f"   {place}"
-        )
-    await message.answer("\n".join(lines))
+    await callback.message.answer(
+        f'<b>Маршрут команды «{escape(user["team"])}»</b>\n\n' +
+        '\n'.join(route_lines(user['team'])) +
+        '\n\nФизический маршрут не меняется из-за решений: меняются сюжетные последствия.'
+    )
 
 
-@router.message(F.text == "Следующая точка")
+@router.callback_query(F.data == 'program:workshops')
+async def program_workshops(callback: CallbackQuery) -> None:
+    await callback.answer()
+    lines = ['<b>Мастерские Хранителей · 15:50–17:50</b>']
+    lines.extend(f'• {title} — {place}' for title, place in WORKSHOPS)
+    lines.append('\nТочное окно мастерской зависит от цвета команды и указано в маршрутном листе.')
+    await callback.message.answer('\n'.join(lines))
+
+
+@router.callback_query(F.data == 'program:spaces')
+async def program_spaces(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        '<b>Открытые пространства Архива</b>\n\n'
+        '• «Пушкин. Код слова»\n'
+        '• «Екатерина Великая. Кабинет эпохи»\n'
+        '• «Культурный код России»\n'
+        '• «Гагарин. Первый шаг»\n'
+        '• «Лица памяти»\n'
+        '• VR-зоны русской культуры и истории\n\n'
+        'Выберите пространство, после которого у команды появился новый вопрос — не только удачная фотография.'
+    )
+
+
+@router.message(F.text == 'Следующая точка')
 async def next_point(message: Message) -> None:
     user = await require_user(message)
     if not user:
         return
-
-    choices = await get_team_choices(user)
-    done = {row["location_key"] for row in choices}
-
-    for index, key in enumerate(ROUTES[user["team"]]):
-        if key == "open":
-            continue
-        if key not in done:
-            location = LOCATIONS[key]
-            await message.answer(
-                "<b>Архив вызывает вашу команду.</b>\n\n"
-                f"Следующая точка: <b>{location['title']}</b>\n"
-                f"Место: {location['place']}\n"
-                f"Время: {TIME_SLOTS[index]}",
-                reply_markup=inline_buttons(
-                    [
-                        ("Ввести код локации", f"open:{key}"),
-                        ("Нужна помощь", "support:location"),
-                    ]
-                ),
-            )
-            return
-
+    current = await current_route_key(user)
+    if not current:
+        await message.answer(
+            '<b>Маршрут собран.</b>\n\nВсе четыре решения зафиксированы, открытые пространства отмечены. '
+            'Команда готова к общему финалу «Эффект бабочки».',
+            reply_markup=inline_buttons([('Показать итоговый контур', 'progress:final')]),
+        )
+        return
+    index, key = current
+    if key == 'open':
+        buttons = [('Мы посетили пространства', 'route:mark-open'), ('Весь маршрут', 'program:route')]
+        await message.answer(
+            '<b>Архив выводит команду за пределы одной комнаты.</b>\n\n'
+            f'Время: <b>{TIME_SLOTS[index]}</b>\n'
+            f'Точка: <b>{OPEN_SPACES["title"]}</b>\n'
+            f'Место: {OPEN_SPACES["place"]}\n\n{OPEN_SPACES["story"]}',
+            reply_markup=inline_buttons(buttons),
+        )
+        return
+    location = LOCATIONS[key]
+    buttons = [
+        ('Личное испытание', f'puzzle:{key}'),
+        ('Ввести код локации', f'location:open:{key}'),
+        ('Весь маршрут', 'program:route'),
+    ]
     await message.answer(
-        "Основной маршрут завершён. Ожидайте открытия общего финала."
+        '<b>Архив вызывает вашу команду.</b>\n\n'
+        f'Время: <b>{TIME_SLOTS[index]}</b>\n'
+        f'Локация: <b>{location["title"]}</b>\n'
+        f'Место: {location["place"]}\n\n'
+        f'{location["offline_task"]}',
+        reply_markup=inline_buttons(buttons),
     )
 
 
-@router.callback_query(F.data.startswith("open:"))
-async def open_location(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == 'route:mark-open')
+async def mark_open_spaces(callback: CallbackQuery) -> None:
     user = await get_user(callback.from_user.id)
     if not user:
-        await callback.answer("Сначала зарегистрируйся через /start.", show_alert=True)
+        await callback.answer('Сначала зарегистрируйся.', show_alert=True)
         return
-    if user["role"] not in {"captain", "admin"}:
-        await callback.answer(
-            "Код и решение вводит капитан команды.",
-            show_alert=True,
-        )
+    if user['role'] != 'captain' and not await is_admin(callback.from_user.id):
+        await callback.answer('Отметку ставит капитан команды или Архивариус.', show_alert=True)
         return
-
-    key = callback.data.split(":", 1)[1]
-    if key not in LOCATIONS:
-        await callback.answer("Локация не найдена.", show_alert=True)
-        return
-
     await callback.answer()
-    await state.update_data(location_key=key)
-    await state.set_state(CaptainFlow.code)
-    await callback.message.answer(
-        "<b>Архив услышал ваш шаг.</b>\n"
-        "Введите знак, который передал Хранитель локации."
+    await db.execute(
+        '''INSERT OR IGNORE INTO route_marks(event_date, team, route_key, marked_by, marked_at)
+           VALUES(?, ?, 'open', ?, ?)''',
+        (user['event_date'], user['team'], callback.from_user.id, utcnow()),
     )
-
-
-@router.message(CaptainFlow.code)
-async def location_code(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    key = data.get("location_key")
-    user = await get_user(message.from_user.id)
-
-    if not user or key not in LOCATIONS:
-        await state.clear()
-        await message.answer("Сессия устарела. Нажми «Следующая точка» ещё раз.")
-        return
-
-    exists = await db_one(
-        """
-        SELECT 1
-        FROM team_choices
-        WHERE event_date = ? AND team = ? AND location_key = ?
-        """,
-        (user["event_date"], user["team"], key),
-    )
-    if exists:
-        await state.clear()
-        await message.answer("Эта страница уже восстановлена вашей командой.")
-        return
-
-    entered = (message.text or "").strip().upper()
-    if entered != str(LOCATIONS[key]["code"]).upper():
-        await message.answer(
-            "Архив не узнаёт этот знак. Проверь код у Хранителя локации."
-        )
-        return
-
-    location = LOCATIONS[key]
-    builder = InlineKeyboardBuilder()
-    for choice_code, button_text, _, _ in location["choices"]:
-        builder.button(
-            text=button_text,
-            callback_data=f"choice:{key}:{choice_code}",
-        )
-    builder.adjust(1)
-
-    await state.set_state(CaptainFlow.confirm)
-    await message.answer(
-        f"{location['intro']}\n\n<b>{location['question']}</b>",
-        reply_markup=builder.as_markup(),
-    )
-
-
-@router.callback_query(CaptainFlow.confirm, F.data.startswith("choice:"))
-async def choose(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    _, key, choice_code = callback.data.split(":", 2)
-    if key not in LOCATIONS:
-        await state.clear()
-        return
-
-    choice = next(
-        (item for item in LOCATIONS[key]["choices"] if item[0] == choice_code),
-        None,
-    )
-    if not choice:
-        await state.clear()
-        return
-
-    await state.update_data(location_key=key, choice_code=choice_code)
     await callback.message.edit_text(
-        f"Вы выбрали: <b>{choice[1]}</b>\n\n"
-        "Подтвердить решение команды?",
-        reply_markup=inline_buttons(
-            [
-                ("Подтвердить", f"confirm:{key}:{choice_code}"),
-                ("Изменить", f"redo:{key}"),
-            ]
+        '<b>Открытые пространства отмечены.</b>\n'
+        'Архив сохранил не посещение, а готовность команды замечать связи между разными эпохами и голосами.'
+    )
+
+
+@router.message(F.text == 'Игровой Архив')
+async def game_archive(message: Message) -> None:
+    user = await require_user(message)
+    if not user:
+        return
+    rows = await db.all(
+        'SELECT location_key, passed FROM personal_progress WHERE user_id = ?',
+        (message.from_user.id,),
+    )
+    passed = {row['location_key'] for row in rows if row['passed']}
+    buttons = []
+    for key, location in LOCATIONS.items():
+        prefix = '✓ ' if key in passed else ''
+        buttons.append((prefix + location['title'], f'puzzle:{key}'))
+    await message.answer(
+        '<b>Личный контур Хранителя</b>\n\n'
+        'Командные решения принимает капитан после офлайн-локации. Здесь каждый участник проходит короткие '
+        'испытания и собирает собственные артефакты понимания.',
+        reply_markup=inline_buttons(buttons, columns=1),
+    )
+
+
+@router.callback_query(F.data.startswith('puzzle:'))
+async def puzzle_start(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user = await get_user(callback.from_user.id)
+    if not user:
+        await callback.message.answer('Сначала зарегистрируйся через /start.')
+        return
+    key = callback.data.split(':', 1)[1]
+    if key not in LOCATIONS:
+        return
+    location = LOCATIONS[key]
+    row = await db.one(
+        'SELECT passed, artifact FROM personal_progress WHERE user_id = ? AND location_key = ?',
+        (callback.from_user.id, key),
+    )
+    if row and row['passed']:
+        await callback.message.answer(
+            f'<b>{location["title"]}</b> уже восстановлен в твоём личном контуре.\n'
+            f'Артефакт: <b>{escape(row["artifact"])}</b>'
+        )
+        return
+    options = [
+        (text, f'puzzle-answer:{key}:{index}')
+        for index, text in enumerate(location['puzzle_options'])
+    ]
+    await callback.message.answer(
+        f'<b>{location["title"]}</b>\n\n{location["prelude"]}\n\n'
+        f'<b>Испытание</b>\n{location["puzzle_question"]}',
+        reply_markup=inline_buttons(options),
+    )
+
+
+@router.callback_query(F.data.startswith('puzzle-answer:'))
+async def puzzle_answer(callback: CallbackQuery) -> None:
+    await callback.answer()
+    _, key, index_raw = callback.data.split(':', 2)
+    if key not in LOCATIONS or not index_raw.isdigit():
+        return
+    location = LOCATIONS[key]
+    index = int(index_raw)
+    existing = await db.one(
+        'SELECT attempts, passed FROM personal_progress WHERE user_id = ? AND location_key = ?',
+        (callback.from_user.id, key),
+    )
+    attempts = int(existing['attempts']) + 1 if existing else 1
+    correct = index == int(location['puzzle_correct'])
+    await db.execute(
+        '''INSERT INTO personal_progress(user_id, location_key, attempts, passed, artifact, completed_at)
+           VALUES(?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, location_key) DO UPDATE SET
+               attempts = excluded.attempts,
+               passed = MAX(personal_progress.passed, excluded.passed),
+               artifact = CASE WHEN excluded.passed = 1 THEN excluded.artifact ELSE personal_progress.artifact END,
+               completed_at = CASE WHEN excluded.passed = 1 THEN excluded.completed_at ELSE personal_progress.completed_at END''',
+        (
+            callback.from_user.id,
+            key,
+            attempts,
+            1 if correct else 0,
+            location['artifact'] if correct else '',
+            utcnow() if correct else None,
         ),
     )
+    if correct:
+        await callback.message.edit_text(
+            f'<b>Фрагмент восстановлен.</b>\n\n{location["puzzle_success"]}\n\n'
+            f'Получен артефакт: <b>{location["artifact"]}</b>'
+        )
+    else:
+        await callback.message.edit_text(
+            f'{location["puzzle_retry"]}\n\nПопытка {attempts}.',
+            reply_markup=inline_buttons([('Вернуться к испытанию', f'puzzle:{key}')]),
+        )
 
 
-@router.callback_query(CaptainFlow.confirm, F.data.startswith("redo:"))
-async def redo_choice(callback: CallbackQuery) -> None:
-    await callback.answer()
-    key = callback.data.split(":", 1)[1]
+@router.callback_query(F.data.startswith('location:open:'))
+async def location_open(callback: CallbackQuery, state: FSMContext) -> None:
+    user = await get_user(callback.from_user.id)
+    if not user:
+        await callback.answer('Сначала зарегистрируйся.', show_alert=True)
+        return
+    if user['role'] != 'captain' and not await is_admin(callback.from_user.id):
+        await callback.answer('Код и решение фиксирует капитан команды.', show_alert=True)
+        return
+    key = callback.data.rsplit(':', 1)[1]
     if key not in LOCATIONS:
         return
-
-    builder = InlineKeyboardBuilder()
-    for choice_code, button_text, _, _ in LOCATIONS[key]["choices"]:
-        builder.button(
-            text=button_text,
-            callback_data=f"choice:{key}:{choice_code}",
-        )
-    builder.adjust(1)
-    await callback.message.edit_text(
-        f"<b>{LOCATIONS[key]['question']}</b>",
-        reply_markup=builder.as_markup(),
+    game_status = await db.setting('game_status', 'open')
+    if game_status != 'open' and not await is_admin(callback.from_user.id):
+        await callback.answer('Архив временно приостановлен организатором.', show_alert=True)
+        return
+    exists = await db.one(
+        'SELECT 1 FROM team_choices WHERE event_date = ? AND team = ? AND location_key = ?',
+        (user['event_date'], user['team'], key),
+    )
+    if exists:
+        await callback.answer('Эта локация уже пройдена вашей командой.', show_alert=True)
+        return
+    await callback.answer()
+    await state.update_data(location_key=key)
+    await state.set_state(LocationFlow.code)
+    await callback.message.answer(
+        '<b>Архив услышал ваш шаг.</b>\n'
+        'Введите знак, который передал Хранитель локации после офлайн-задания.'
     )
 
 
-@router.callback_query(CaptainFlow.confirm, F.data.startswith("confirm:"))
-async def confirm_choice(
-    callback: CallbackQuery,
-    state: FSMContext,
-    bot: Bot,
-) -> None:
+@router.message(LocationFlow.code)
+async def location_code(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    key = data.get('location_key')
+    user = await get_user(message.from_user.id)
+    if not user or key not in LOCATIONS:
+        await state.clear()
+        await message.answer('Сессия устарела. Нажми «Следующая точка» ещё раз.')
+        return
+    entered = ''.join((message.text or '').split()).upper()
+    expected = ''.join(settings.location_codes[key].split()).upper()
+    if entered != expected:
+        await message.answer(
+            'Архив не узнаёт этот знак. Проверь код у Хранителя локации. '
+            'Для отмены отправь /cancel.'
+        )
+        return
+    await state.set_state(LocationFlow.choice)
+    location = LOCATIONS[key]
+    buttons = [(choice.button, f'choice:{key}:{choice.code}') for choice in location['choices']]
+    await message.answer(
+        '<b>Фрагмент найден.</b>\n\n'
+        f'{location["prelude"]}\n\n'
+        f'<b>{location["question"]}</b>\n'
+        'Обсудите решение всей командой. После подтверждения изменить его сможет только Архивариус.',
+        reply_markup=inline_buttons(buttons),
+    )
+
+
+@router.callback_query(LocationFlow.choice, F.data.startswith('choice:'))
+async def choose_team_option(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    _, key, choice_code = callback.data.split(":", 2)
+    _, key, code = callback.data.split(':', 2)
+    if key not in LOCATIONS:
+        return
+    choice = next((item for item in LOCATIONS[key]['choices'] if item.code == code), None)
+    if not choice:
+        return
+    await state.update_data(location_key=key, choice_code=code)
+    await callback.message.edit_text(
+        f'Команда выбирает: <b>{choice.button}</b>\n\nПодтвердить решение?',
+        reply_markup=inline_buttons([
+            ('Подтвердить выбор', f'confirm:{key}:{code}'),
+            ('Вернуться к вариантам', f'redo:{key}'),
+        ]),
+    )
+
+
+@router.callback_query(LocationFlow.choice, F.data.startswith('redo:'))
+async def redo_team_option(callback: CallbackQuery) -> None:
+    await callback.answer()
+    key = callback.data.split(':', 1)[1]
+    if key not in LOCATIONS:
+        return
+    location = LOCATIONS[key]
+    await callback.message.edit_text(
+        f'<b>{location["question"]}</b>',
+        reply_markup=inline_buttons([
+            (choice.button, f'choice:{key}:{choice.code}') for choice in location['choices']
+        ]),
+    )
+
+
+@router.callback_query(LocationFlow.choice, F.data.startswith('confirm:'))
+async def confirm_team_option(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await callback.answer()
+    _, key, code = callback.data.split(':', 2)
     user = await get_user(callback.from_user.id)
     if not user or key not in LOCATIONS:
         await state.clear()
         return
-
-    choice = next(
-        (item for item in LOCATIONS[key]["choices"] if item[0] == choice_code),
-        None,
-    )
+    choice = next((item for item in LOCATIONS[key]['choices'] if item.code == code), None)
     if not choice:
         await state.clear()
         return
-
     try:
-        await db_exec(
-            """
-            INSERT INTO team_choices(
-                event_date, team, location_key, choice_code,
-                selected_by, effects_json, created_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?)
-            """,
+        await db.execute(
+            '''INSERT INTO team_choices(
+                event_date, team, location_key, choice_code, selected_by, effects_json,
+                immediate_text, hidden_text, video_symbol, narrator_hint, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (
-                user["event_date"],
-                user["team"],
-                key,
-                choice_code,
-                user["telegram_id"],
-                json.dumps(choice[2], ensure_ascii=False),
-                utcnow(),
+                user['event_date'], user['team'], key, code, callback.from_user.id,
+                json.dumps(choice.effects, ensure_ascii=False), choice.immediate,
+                choice.hidden, choice.symbol, choice.narrator_hint, utcnow(),
             ),
+        )
+        await db.execute(
+            '''INSERT OR REPLACE INTO route_marks(event_date, team, route_key, marked_by, marked_at)
+               VALUES(?, ?, ?, ?, ?)''',
+            (user['event_date'], user['team'], key, callback.from_user.id, utcnow()),
         )
     except aiosqlite.IntegrityError:
         await state.clear()
-        await callback.message.edit_text(
-            "Эта страница уже восстановлена вашей командой."
-        )
+        await callback.message.edit_text('Эта страница уже восстановлена вашей командой.')
         return
-
+    await db.log(callback.from_user.id, 'team_choice', {
+        'event_date': user['event_date'], 'team': user['team'], 'location': key, 'choice': code,
+    })
     await state.clear()
-    await callback.message.edit_text(choice[3])
-
-    members = await db_all(
-        """
-        SELECT telegram_id
-        FROM users
-        WHERE event_date = ? AND team = ? AND telegram_id <> ?
-        """,
-        (user["event_date"], user["team"], user["telegram_id"]),
+    await callback.message.edit_text(
+        '<b>Выбор зафиксирован.</b>\n\n'
+        f'{choice.immediate}\n\n'
+        'След уже вошёл в контур последствий. Полный смысл решения проявится только в финале.'
     )
-    for member in members:
-        try:
-            await bot.send_message(
-                member["telegram_id"],
-                f"Команда приняла решение в локации "
-                f"«{LOCATIONS[key]['title']}».\n\n{choice[3]}",
-            )
-        except Exception:
-            log.exception("Could not notify team member %s", member["telegram_id"])
+    await notify_team(
+        bot,
+        user,
+        f'<b>Команда приняла решение в локации «{LOCATIONS[key]["title"]}».</b>\n\n{choice.immediate}',
+    )
 
 
-@router.message(F.text == "Состояние Архива")
-async def archive_state(message: Message) -> None:
+@router.message(Command('progress'))
+@router.message(F.text == 'Мой прогресс')
+async def progress(message: Message) -> None:
     user = await require_user(message)
     if not user:
         return
+    personal_rows = await db.all(
+        'SELECT location_key, passed, artifact, attempts FROM personal_progress WHERE user_id = ?',
+        (message.from_user.id,),
+    )
+    personal = {row['location_key']: row for row in personal_rows}
+    choices = await team_choices(user['event_date'], user['team'])
+    values = await team_parameters(user['event_date'], user['team'])
+    current = await current_route_key(user)
 
-    parameters = await team_parameters(user)
-    labels = {
-        "memory": "Память",
-        "truth": "Истина",
-        "unity": "Связь голосов",
-        "progress": "Прогресс",
-        "responsibility": "Ответственность",
-    }
-    phrases = []
-    for key, title in labels.items():
-        value = parameters[key]
-        state = (
-            "укрепляется"
-            if value >= 3
-            else "остаётся хрупкой"
-            if value <= 0
-            else "обретает форму"
+    artifact_lines = []
+    for key, location in LOCATIONS.items():
+        row = personal.get(key)
+        artifact_lines.append(
+            f'{"✓" if row and row["passed"] else "○"} {location["artifact"]}'
         )
-        phrases.append(f"{title}: {state}.")
-    await message.answer("<b>Состояние Архива</b>\n" + "\n".join(phrases))
-
-
-@router.message(F.text == "Мои фрагменты")
-async def fragments(message: Message) -> None:
-    user = await require_user(message)
-    if not user:
-        return
-
-    done = {
-        row["location_key"]
-        for row in await get_team_choices(user)
-    }
-    names = [
-        ("culture", "Символ культуры"),
-        ("science", "Печать открытия"),
-        ("history", "Фрагмент времени"),
-        ("memory", "Голос памяти"),
-    ]
-    content = "\n".join(
-        f"{'✓' if key in done else '○'} {title}"
-        for key, title in names
+    strongest = sorted(values.items(), key=lambda item: item[1], reverse=True)[:2]
+    weak = sorted(values.items(), key=lambda item: item[1])[:1]
+    state_text = (
+        f'Сильнее всего проявляются: {", ".join(PARAMETER_LABELS[k] for k, v in strongest if v > 0) or "контур ещё не сформирован"}. '
+        f'Хрупкая линия: {PARAMETER_LABELS[weak[0][0]]}.' if choices else
+        'Командный контур ещё не сформирован: первый выбор появится после локации.'
     )
-    await message.answer(f"<b>Мешочек памяти</b>\n{content}")
-
-
-@router.message(F.text == "Правила")
-async def rules(message: Message) -> None:
+    next_text = 'маршрут завершён' if not current else (
+        OPEN_SPACES['title'] if current[1] == 'open' else LOCATIONS[current[1]]['title']
+    )
     await message.answer(
-        "1. Двигайся только со своей командой.\n"
-        "2. Основные задания выполняются офлайн.\n"
-        "3. Решение после локации фиксирует капитан.\n"
-        "4. Ошибка не означает поражение: она меняет последствия."
+        '<b>Личный контур</b>\n' + '\n'.join(artifact_lines) + '\n\n'
+        f'<b>Команда «{escape(user["team"])}»</b>\n'
+        f'Решений: {len(choices)} из 4\n'
+        f'Следующая точка: {next_text}\n\n'
+        f'{state_text}',
+        reply_markup=inline_buttons([
+            ('Маршрут команды', 'program:route'),
+            ('Итоговый контур', 'progress:final'),
+        ]),
     )
 
 
-@router.message(F.text == "Позвать Архивариуса")
-async def support(message: Message) -> None:
-    user = await require_user(message)
-    if not user:
-        return
-
-    await message.answer(
-        "Что произошло?",
-        reply_markup=inline_buttons(
-            [
-                ("Не могу найти локацию", "support:location"),
-                ("Код не работает", "support:code"),
-                ("Отстал от команды", "support:lost"),
-                ("Плохо себя чувствую", "support:health"),
-                ("Другой вопрос", "support:other"),
-            ]
-        ),
-    )
-
-
-@router.callback_query(F.data.startswith("support:"))
-async def support_category(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == 'progress:final')
+async def progress_final(callback: CallbackQuery) -> None:
+    await callback.answer()
     user = await get_user(callback.from_user.id)
     if not user:
-        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+    choices = await team_choices(user['event_date'], user['team'])
+    if len(choices) < 4:
+        await callback.message.answer(
+            f'Архив восстановлен на {len(choices)} из 4 ключевых фрагментов. '
+            'Финальный архетип пока скрыт: преждевременный ответ изменил бы обсуждение команды.'
+        )
+        return
+    title, text, _ = final_archetype(await team_parameters(user['event_date'], user['team']))
+    final_open = await db.setting('final_open', '0')
+    if final_open != '1' and not await is_admin(callback.from_user.id):
+        await callback.message.answer(
+            'Контур собран, но Архивариусы ещё не открыли общий финал. '
+            'Сохраните тишину перед последним последствием.'
+        )
+        return
+    await callback.message.answer(
+        f'<b>Версия Архива вашей команды: «{title}»</b>\n\n{text}'
+    )
+
+
+@router.message(F.text == 'Задать вопрос')
+async def ask_question(message: Message) -> None:
+    user = await require_user(message)
+    if not user:
+        return
+    await message.answer(
+        '<b>Позвать Архивариуса</b>\nВыбери тему. В экстренной ситуации сразу обратись к волонтёру рядом.',
+        reply_markup=inline_buttons([
+            (label, f'support:{key}') for key, label in CATEGORY_LABELS.items()
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith('support:'))
+async def support_category(callback: CallbackQuery, state: FSMContext) -> None:
+    key = callback.data.split(':', 1)[1]
+    if key not in CATEGORY_LABELS:
         return
     await callback.answer()
-    await state.update_data(category=callback.data.split(":", 1)[1])
+    await state.update_data(category=key)
     await state.set_state(SupportFlow.text)
     await callback.message.answer(
-        "Коротко опиши ситуацию. Сообщение уйдёт организаторам."
+        f'<b>{CATEGORY_LABELS[key]}</b>\nКоротко опиши ситуацию. Сообщение увидят только Архивариусы.'
     )
 
 
 @router.message(SupportFlow.text)
-async def support_text(
-    message: Message,
-    state: FSMContext,
-    bot: Bot,
-) -> None:
-    data = await state.get_data()
+async def support_text(message: Message, state: FSMContext, bot: Bot) -> None:
     user = await get_user(message.from_user.id)
     if not user:
         await state.clear()
         return
-
-    category = data.get("category", "other")
-    body = (message.text or "").strip()[:1000]
-    await db_exec(
-        """
-        INSERT INTO support_requests(
-            user_id, category, message, created_at
-        )
-        VALUES(?, ?, ?, ?)
-        """,
-        (message.from_user.id, category, body, utcnow()),
+    data = await state.get_data()
+    body = ' '.join((message.text or '').split())[:1000]
+    if not body:
+        await message.answer('Опиши вопрос одним сообщением или отправь /cancel.')
+        return
+    request_id = await db.execute_returning_id(
+        '''INSERT INTO support_requests(user_id, category, message, created_at)
+           VALUES(?, ?, ?, ?)''',
+        (message.from_user.id, data.get('category', 'other'), body, utcnow()),
     )
-
-    admin_message = (
-        "<b>Новое обращение</b>\n"
-        f"Участник: {html.escape(user['full_name'])}\n"
-        f"Telegram: @{html.escape(user['username'] or 'нет username')}\n"
-        f"День: {html.escape(user['event_date'])}\n"
-        f"Команда: {html.escape(user['team'])}\n"
-        f"Категория: {html.escape(category)}\n"
-        f"Сообщение: {html.escape(body)}"
+    await state.clear()
+    admin_text = (
+        f'<b>Обращение #{request_id}</b>\n'
+        f'Хранитель: {escape(user["full_name"])}\n'
+        f'Команда: {escape(user["team"])}\n'
+        f'Тема: {CATEGORY_LABELS.get(data.get("category"), "Другой вопрос")}\n'
+        f'Сообщение: {escape(body)}\n\n'
+        f'Ответить: <code>/reply {request_id} текст ответа</code>'
     )
-    for admin_id in settings.admin_ids:
+    for admin_id in await admin_recipients():
         try:
-            await bot.send_message(admin_id, admin_message)
+            await bot.send_message(admin_id, admin_text)
         except Exception:
-            log.exception("Could not send support request to admin %s", admin_id)
+            log.warning('Could not notify admin %s', admin_id, exc_info=True)
+    await message.answer(
+        f'Обращение #{request_id} передано Архивариусам. Ответ придёт сюда.',
+        reply_markup=main_menu(await is_admin(message.from_user.id)),
+    )
 
+
+@router.message(Command('reply'))
+async def reply_support_command(message: Message, bot: Bot) -> None:
+    if not await is_admin(message.from_user.id):
+        return
+    parts = (message.text or '').split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer('Формат: <code>/reply НОМЕР текст ответа</code>')
+        return
+    request_id = int(parts[1])
+    body = parts[2][:1000]
+    request = await db.one('SELECT * FROM support_requests WHERE id = ?', (request_id,))
+    if not request:
+        await message.answer('Обращение не найдено.')
+        return
+    await db.execute(
+        '''UPDATE support_requests SET status = 'answered', answer = ?, answered_by = ?, answered_at = ?
+           WHERE id = ?''',
+        (body, message.from_user.id, utcnow(), request_id),
+    )
+    await db.log(message.from_user.id, 'support_answer', {'request_id': request_id})
+    try:
+        await bot.send_message(
+            request['user_id'],
+            f'<b>Ответ Архивариуса на обращение #{request_id}</b>\n\n{escape(body)}',
+        )
+        await message.answer('Ответ отправлен участнику.')
+    except Exception:
+        await message.answer('Ответ сохранён, но Telegram не смог доставить сообщение.')
+
+
+@router.message(Command('cancel'))
+async def cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
-        "Обращение передано Архивариусу.",
-        reply_markup=main_menu(),
+        'Действие отменено.',
+        reply_markup=main_menu(await is_admin(message.from_user.id)),
     )
 
 
-@router.message(Command("admin"))
-async def admin_panel(message: Message) -> None:
-    if message.from_user.id not in settings.admin_ids:
-        return
-
-    users = await db_one("SELECT COUNT(*) AS total FROM users")
-    requests = await db_one(
-        "SELECT COUNT(*) AS total FROM support_requests WHERE status = 'open'"
-    )
-    teams_done = await db_one(
-        """
-        SELECT COUNT(*) AS total
-        FROM (
-            SELECT event_date, team, COUNT(*) AS amount
-            FROM team_choices
-            GROUP BY event_date, team
-            HAVING amount = 4
-        )
-        """
+@router.message(Command('whoami'))
+async def whoami(message: Message) -> None:
+    user = await get_user(message.from_user.id)
+    role = user['role'] if user else 'не зарегистрирован'
+    access = 'суперадминистратор' if is_superadmin(message.from_user.id) else (
+        'администратор' if await is_admin(message.from_user.id) else 'нет'
     )
     await message.answer(
-        "<b>Последний хранитель — панель</b>\n"
-        f"Зарегистрировано: {users['total']}\n"
-        f"Обращений без ответа: {requests['total']}\n"
-        f"Команд завершили маршрут: {teams_done['total']}",
-        reply_markup=inline_buttons(
-            [
-                ("Назначить капитана", "admin:captain"),
-                ("Открыть финал", "admin:final"),
-                ("Экспорт CSV", "admin:export"),
-            ]
-        ),
+        f'Telegram ID: <code>{message.from_user.id}</code>\n'
+        f'Игровая роль: {escape(role)}\n'
+        f'Админ-доступ: {access}'
     )
 
 
-@router.callback_query(F.data == "admin:captain")
-async def admin_captain_help(callback: CallbackQuery) -> None:
-    if callback.from_user.id not in settings.admin_ids:
-        await callback.answer("Нет доступа.", show_alert=True)
+@router.message(F.text == 'Панель Архивариуса')
+@router.message(Command('admin'))
+async def admin_panel(message: Message) -> None:
+    if not await is_admin(message.from_user.id):
+        await message.answer('Эта часть Архива закрыта.')
+        return
+    await show_admin_panel(message)
+
+
+async def show_admin_panel(message: Message) -> None:
+    users = await db.one('SELECT COUNT(*) AS total FROM users')
+    open_requests = await db.one("SELECT COUNT(*) AS total FROM support_requests WHERE status = 'open'")
+    choices = await db.one('SELECT COUNT(*) AS total FROM team_choices')
+    game_status = await db.setting('game_status', 'open')
+    buttons = [
+        ('Команды', 'admin:teams'),
+        ('Участники', 'admin:users'),
+        ('Обращения', 'admin:support'),
+        ('Назначить капитана', 'admin:captains'),
+        ('Рассылка', 'admin:broadcast'),
+        ('Экспорт', 'admin:export'),
+        ('Открыть финал', 'admin:final'),
+        ('Пауза игры' if game_status == 'open' else 'Возобновить игру', 'admin:toggle-game'),
+    ]
+    if is_superadmin(message.from_user.id):
+        buttons.append(('Администраторы', 'admin:admins'))
+    await message.answer(
+        '<b>Панель Архивариуса</b>\n\n'
+        f'Участников: {users["total"]}\n'
+        f'Командных решений: {choices["total"]} из 20 возможных на один поток\n'
+        f'Открытых обращений: {open_requests["total"]}\n'
+        f'Статус игры: {"открыта" if game_status == "open" else "пауза"}',
+        reply_markup=inline_buttons(buttons, columns=2),
+    )
+
+
+@router.callback_query(F.data == 'admin:teams')
+async def admin_teams(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
         return
     await callback.answer()
+    rows = await db.all(
+        '''SELECT event_date, team, COUNT(*) AS users,
+                  SUM(CASE WHEN role = 'captain' THEN 1 ELSE 0 END) AS captains
+           FROM users GROUP BY event_date, team ORDER BY event_date, team'''
+    )
+    if not rows:
+        await callback.message.answer('Пока нет зарегистрированных команд.')
+        return
+    lines = ['<b>Команды и готовность</b>']
+    for row in rows:
+        completed = await db.one(
+            'SELECT COUNT(*) AS total FROM team_choices WHERE event_date = ? AND team = ?',
+            (row['event_date'], row['team']),
+        )
+        lines.append(
+            f'\n<b>{escape(row["team"])}</b> · {format_event_date(row["event_date"])}\n'
+            f'Участников: {row["users"]} · капитанов: {row["captains"] or 0} · решений: {completed["total"]}/4'
+        )
+    await callback.message.answer('\n'.join(lines))
+
+
+@router.callback_query(F.data == 'admin:users')
+async def admin_users(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    rows = await db.all('SELECT * FROM users ORDER BY created_at DESC LIMIT 30')
+    if not rows:
+        await callback.message.answer('Участников пока нет.')
+        return
+    lines = ['<b>Последние регистрации</b>']
+    for row in rows:
+        marker = ' ★' if row['role'] == 'captain' else ''
+        lines.append(
+            f'{escape(row["full_name"])} — {escape(row["team"])}{marker} · '
+            f'<code>{row["telegram_id"]}</code>'
+        )
+    lines.append('\n★ — капитан. Для полного списка используй экспорт.')
+    await callback.message.answer('\n'.join(lines))
+
+
+@router.callback_query(F.data == 'admin:captains')
+async def admin_captains(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    buttons = [(team, f'admin:captain-team:{TEAM_COLORS.index(team)}') for team in TEAM_COLORS]
+    await callback.message.answer('Выбери команду:', reply_markup=inline_buttons(buttons))
+
+
+@router.callback_query(F.data.startswith('admin:captain-team:'))
+async def admin_captain_team(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    index = int(callback.data.rsplit(':', 1)[1])
+    team = TEAM_COLORS[index]
+    rows = await db.all(
+        'SELECT telegram_id, full_name, event_date, role FROM users WHERE team = ? ORDER BY event_date, full_name LIMIT 50',
+        (team,),
+    )
+    if not rows:
+        await callback.message.answer('В этой команде пока нет участников.')
+        return
+    buttons = [
+        (f'{format_event_date(row["event_date"])} · {row["full_name"]}', f'admin:set-captain:{row["telegram_id"]}')
+        for row in rows
+    ]
     await callback.message.answer(
-        "Назначение капитана:\n"
-        "<code>/captain TELEGRAM_ID</code>\n\n"
-        "Например: <code>/captain 123456789</code>"
+        f'<b>Капитан команды «{team}»</b>\nВыбери участника. Предыдущий капитан этого дня и команды будет снят.',
+        reply_markup=inline_buttons(buttons),
     )
 
 
-@router.message(Command("captain"))
-async def set_captain(message: Message) -> None:
-    if message.from_user.id not in settings.admin_ids:
+@router.callback_query(F.data.startswith('admin:set-captain:'))
+async def admin_set_captain(callback: CallbackQuery, bot: Bot) -> None:
+    if not await is_admin(callback.from_user.id):
         return
-
-    parts = (message.text or "").split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Формат: /captain TELEGRAM_ID")
+    target_id = int(callback.data.rsplit(':', 1)[1])
+    target = await get_user(target_id)
+    if not target:
+        await callback.answer('Участник не найден.', show_alert=True)
         return
-
-    target_id = int(parts[1])
-    user = await get_user(target_id)
-    if not user:
-        await message.answer("Участник с таким Telegram ID не зарегистрирован.")
-        return
-
-    await db_exec(
-        "UPDATE users SET role = 'captain' WHERE telegram_id = ?",
-        (target_id,),
+    await callback.answer()
+    await db.execute(
+        "UPDATE users SET role = 'participant' WHERE event_date = ? AND team = ? AND role = 'captain'",
+        (target['event_date'], target['team']),
     )
+    await db.execute("UPDATE users SET role = 'captain' WHERE telegram_id = ?", (target_id,))
+    await db.log(callback.from_user.id, 'set_captain', {'target_id': target_id})
+    try:
+        await bot.send_message(
+            target_id,
+            '<b>Архив доверил тебе право последней записи.</b>\n'
+            'Ты назначен капитаном команды. После каждой офлайн-локации именно ты вводишь код и подтверждаешь общее решение.'
+        )
+    except Exception:
+        pass
+    await callback.message.edit_text(
+        f'Капитан назначен: <b>{escape(target["full_name"])}</b>, команда {escape(target["team"])}.'
+    )
+
+
+@router.callback_query(F.data == 'admin:support')
+async def admin_support(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    rows = await db.all(
+        "SELECT * FROM support_requests WHERE status = 'open' ORDER BY id LIMIT 20"
+    )
+    if not rows:
+        await callback.message.answer('Открытых обращений нет.')
+        return
+    buttons = []
+    for row in rows:
+        user = await get_user(row['user_id'])
+        name = user['full_name'] if user else str(row['user_id'])
+        buttons.append((f'#{row["id"]} · {name}', f'admin:support-item:{row["id"]}'))
+    await callback.message.answer('Открытые обращения:', reply_markup=inline_buttons(buttons))
+
+
+@router.callback_query(F.data.startswith('admin:support-item:'))
+async def admin_support_item(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    request_id = int(callback.data.rsplit(':', 1)[1])
+    row = await db.one('SELECT * FROM support_requests WHERE id = ?', (request_id,))
+    if not row:
+        return
+    user = await get_user(row['user_id'])
+    await callback.message.answer(
+        f'<b>Обращение #{request_id}</b>\n'
+        f'Участник: {escape(user["full_name"] if user else row["user_id"])}\n'
+        f'Тема: {CATEGORY_LABELS.get(row["category"], row["category"])}\n'
+        f'Сообщение: {escape(row["message"])}\n\n'
+        f'Ответ: <code>/reply {request_id} ваш текст</code>'
+    )
+
+
+@router.callback_query(F.data == 'admin:broadcast')
+async def admin_broadcast(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await state.set_state(AdminFlow.broadcast)
+    await callback.message.answer(
+        '<b>Рассылка всем зарегистрированным участникам</b>\n'
+        'Отправь одно сообщение. Перед отправкой бот покажет подтверждение. /cancel — отмена.'
+    )
+
+
+@router.message(AdminFlow.broadcast)
+async def admin_broadcast_text(message: Message, state: FSMContext) -> None:
+    text = (message.text or '').strip()
+    if not text or len(text) > 3500:
+        await message.answer('Сообщение должно содержать от 1 до 3500 символов.')
+        return
+    await state.update_data(broadcast_text=text)
+    await state.set_state(AdminFlow.broadcast_confirm)
     await message.answer(
-        f"Капитан назначен: {html.escape(user['full_name'])}, "
-        f"команда {html.escape(user['team'])}."
+        '<b>Предпросмотр рассылки</b>\n\n' + escape(text),
+        reply_markup=inline_buttons([
+            ('Отправить всем', 'admin:broadcast-confirm'),
+            ('Отменить', 'admin:broadcast-cancel'),
+        ]),
     )
 
 
-@router.callback_query(F.data == "admin:final")
-async def admin_final(callback: CallbackQuery, bot: Bot) -> None:
-    if callback.from_user.id not in settings.admin_ids:
-        await callback.answer("Нет доступа.", show_alert=True)
+@router.callback_query(AdminFlow.broadcast_confirm, F.data == 'admin:broadcast-cancel')
+async def admin_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text('Рассылка отменена.')
+
+
+@router.callback_query(AdminFlow.broadcast_confirm, F.data == 'admin:broadcast-confirm')
+async def admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    if not await is_admin(callback.from_user.id):
         return
-
-    await db_exec(
-        "UPDATE settings SET value = '1' WHERE key = 'final_open'"
-    )
-    users = await db_all("SELECT * FROM users")
+    await callback.answer()
+    data = await state.get_data()
+    text = data.get('broadcast_text', '')
+    rows = await db.all('SELECT telegram_id FROM users')
     sent = 0
-    for user in users:
+    for row in rows:
         try:
-            choices = await get_team_choices(user)
-            if len(choices) < 4:
-                continue
-            title, text = final_archetype(await team_parameters(user))
-            await bot.send_message(
-                user["telegram_id"],
-                "<b>Архив собрал все ваши решения.</b>\n\n"
-                f"Ваш итог: <b>{title}</b>\n{text}",
-            )
+            await bot.send_message(row['telegram_id'], escape(text))
             sent += 1
         except Exception:
-            log.exception("Could not send final to %s", user["telegram_id"])
-
-    await callback.answer(
-        f"Финал открыт. Сообщений отправлено: {sent}",
-        show_alert=True,
-    )
+            pass
+    await db.log(callback.from_user.id, 'broadcast', {'sent': sent, 'total': len(rows)})
+    await state.clear()
+    await callback.message.edit_text(f'Рассылка завершена: {sent} из {len(rows)} сообщений доставлены.')
 
 
-@router.callback_query(F.data == "admin:export")
-async def admin_export(callback: CallbackQuery) -> None:
-    if callback.from_user.id not in settings.admin_ids:
-        await callback.answer("Нет доступа.", show_alert=True)
+@router.callback_query(F.data == 'admin:toggle-game')
+async def admin_toggle_game(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
         return
-
     await callback.answer()
-    rows = await db_all(
-        "SELECT * FROM users ORDER BY event_date, team, full_name"
+    current = await db.setting('game_status', 'open')
+    new_value = 'paused' if current == 'open' else 'open'
+    await db.set_setting('game_status', new_value)
+    await db.log(callback.from_user.id, 'toggle_game', {'status': new_value})
+    await callback.message.answer(
+        'Игра приостановлена: новые коды временно не принимаются.'
+        if new_value == 'paused' else
+        'Игра возобновлена: капитаны снова могут фиксировать решения.'
     )
-    stream = io.StringIO()
-    writer = csv.writer(stream)
-    fields = [
-        "telegram_id",
-        "username",
-        "full_name",
-        "age",
-        "organization",
-        "event_date",
-        "team",
-        "role",
-        "checked_in",
-    ]
-    writer.writerow(fields)
-    for row in rows:
-        writer.writerow([row[field] for field in fields])
+
+
+@router.callback_query(F.data == 'admin:final')
+async def admin_open_final(callback: CallbackQuery, bot: Bot) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await db.set_setting('final_open', '1')
+    teams = await db.all('SELECT DISTINCT event_date, team FROM users')
+    sent = 0
+    for team_row in teams:
+        choices = await team_choices(team_row['event_date'], team_row['team'])
+        if len(choices) < 4:
+            continue
+        title, text, _ = final_archetype(
+            await team_parameters(team_row['event_date'], team_row['team'])
+        )
+        members = await db.all(
+            'SELECT telegram_id FROM users WHERE event_date = ? AND team = ?',
+            (team_row['event_date'], team_row['team']),
+        )
+        for member in members:
+            try:
+                await bot.send_message(
+                    member['telegram_id'],
+                    f'<b>Архив собрал все решения вашей команды.</b>\n\n'
+                    f'Итог: <b>{title}</b>\n{text}'
+                )
+                sent += 1
+            except Exception:
+                pass
+    await db.log(callback.from_user.id, 'open_final', {'messages_sent': sent})
+    await callback.message.answer(f'Финал открыт. Отправлено сообщений: {sent}.')
+
+
+@router.callback_query(F.data == 'admin:export')
+async def admin_export(callback: CallbackQuery) -> None:
+    if not await is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    users = await db.all('SELECT * FROM users ORDER BY event_date, team, full_name')
+    choices = await db.all('SELECT * FROM team_choices ORDER BY event_date, team, id')
+    supports = await db.all('SELECT * FROM support_requests ORDER BY id')
+
+    user_stream = io.StringIO()
+    writer = csv.writer(user_stream)
+    user_fields = ['telegram_id', 'username', 'full_name', 'age', 'organization', 'event_date', 'team', 'role', 'status']
+    writer.writerow(user_fields)
+    for row in users:
+        writer.writerow([row[field] for field in user_fields])
+
+    summary: list[dict[str, Any]] = []
+    grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for row in choices:
+        grouped[(row['event_date'], row['team'])].append(row)
+    for (event_date, team), rows in grouped.items():
+        parameters = await team_parameters(event_date, team)
+        title, final_text, archetype = final_archetype(parameters)
+        summary.append({
+            'event_date': event_date,
+            'team': team,
+            'archetype': archetype,
+            'title': title,
+            'final_text': final_text,
+            'parameters': parameters,
+            'choices': [
+                {
+                    'location': row['location_key'],
+                    'choice': row['choice_code'],
+                    'hidden_text': row['hidden_text'],
+                    'video_symbol': row['video_symbol'],
+                    'narrator_hint': row['narrator_hint'],
+                }
+                for row in rows
+            ],
+        })
+
+    support_stream = io.StringIO()
+    writer = csv.writer(support_stream)
+    writer.writerow(['id', 'user_id', 'category', 'message', 'status', 'answer', 'created_at'])
+    for row in supports:
+        writer.writerow([row[field] for field in ['id', 'user_id', 'category', 'message', 'status', 'answer', 'created_at']])
 
     await callback.message.answer_document(
+        BufferedInputFile(user_stream.getvalue().encode('utf-8-sig'), filename='participants.csv')
+    )
+    await callback.message.answer_document(
         BufferedInputFile(
-            stream.getvalue().encode("utf-8-sig"),
-            filename="last_keeper_users.csv",
+            json.dumps(summary, ensure_ascii=False, indent=2).encode('utf-8'),
+            filename='archive_video_summary.json',
         )
+    )
+    await callback.message.answer_document(
+        BufferedInputFile(support_stream.getvalue().encode('utf-8-sig'), filename='support_requests.csv')
     )
 
 
-@router.message(Command("resetme"))
-async def reset_me(message: Message, state: FSMContext) -> None:
-    user = await get_user(message.from_user.id)
-    if not user:
-        await message.answer("Регистрация ещё не создана.")
+@router.callback_query(F.data == 'admin:admins')
+async def admin_admins(callback: CallbackQuery) -> None:
+    if not is_superadmin(callback.from_user.id):
+        await callback.answer('Только суперадминистратор управляет доступом.', show_alert=True)
         return
-    await db_exec(
-        "DELETE FROM users WHERE telegram_id = ?",
-        (message.from_user.id,),
+    await callback.answer()
+    rows = await db.all('SELECT * FROM admin_users ORDER BY added_at')
+    lines = ['<b>Администраторы</b>', 'Суперадминистраторы задаются только в Render.']
+    for admin_id in sorted(settings.superadmin_ids):
+        lines.append(f'• <code>{admin_id}</code> — суперадминистратор')
+    for row in rows:
+        lines.append(f'• <code>{row["telegram_id"]}</code> — добавлен из панели')
+    buttons = [('Добавить администратора', 'admin:add-admin')]
+    buttons.extend((f'Удалить {row["telegram_id"]}', f'admin:remove-admin:{row["telegram_id"]}') for row in rows)
+    await callback.message.answer('\n'.join(lines), reply_markup=inline_buttons(buttons))
+
+
+@router.callback_query(F.data == 'admin:add-admin')
+async def admin_add_admin(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_superadmin(callback.from_user.id):
+        return
+    await callback.answer()
+    await state.set_state(AdminFlow.add_admin)
+    await callback.message.answer(
+        'Отправь Telegram ID нового администратора. Он может узнать его командой /whoami. /cancel — отмена.'
     )
+
+
+@router.message(AdminFlow.add_admin)
+async def admin_add_admin_id(message: Message, state: FSMContext, bot: Bot) -> None:
+    if not is_superadmin(message.from_user.id):
+        await state.clear()
+        return
+    value = (message.text or '').strip()
+    if not value.isdigit():
+        await message.answer('Нужен числовой Telegram ID.')
+        return
+    target_id = int(value)
+    if target_id in settings.superadmin_ids:
+        await message.answer('Этот ID уже является суперадминистратором.')
+        return
+    await db.execute(
+        '''INSERT INTO admin_users(telegram_id, added_by, added_at) VALUES(?, ?, ?)
+           ON CONFLICT(telegram_id) DO NOTHING''',
+        (target_id, message.from_user.id, utcnow()),
+    )
+    await db.log(message.from_user.id, 'add_admin', {'target_id': target_id})
     await state.clear()
-    await message.answer(
-        "Тестовая регистрация удалена. Отправь /start, чтобы пройти её заново."
-    )
-
-
-@router.message(Command("whoami"))
-async def who_am_i(message: Message) -> None:
-    user = await get_user(message.from_user.id)
-    role = user["role"] if user else "не зарегистрирован"
-    await message.answer(
-        f"Telegram ID: <code>{message.from_user.id}</code>\n"
-        f"Роль: {html.escape(role)}"
-    )
-
-
-bot: Bot | None = None
-dispatcher: Dispatcher | None = None
-bot_username = "unknown"
-
-
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    global bot, dispatcher, bot_username
-
-    if not settings.bot_token:
-        raise RuntimeError("BOT_TOKEN is not configured")
-
-    await init_db()
-    bot = Bot(
-        settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dispatcher = Dispatcher(storage=MemoryStorage())
-    dispatcher.include_router(router)
-
-    me = await bot.get_me()
-    bot_username = me.username or "unknown"
-    log.info("Telegram bot authenticated as @%s", bot_username)
-
-    if settings.public_base_url:
-        webhook_url = (
-            f"{settings.public_base_url}/telegram/webhook/"
-            f"{settings.webhook_secret}"
-        )
-        await bot.set_webhook(
-            webhook_url,
-            allowed_updates=dispatcher.resolve_used_update_types(),
-            drop_pending_updates=False,
-        )
-        log.info("Webhook configured: %s", webhook_url)
-    else:
-        log.warning(
-            "PUBLIC_BASE_URL/RENDER_EXTERNAL_URL is missing. "
-            "Webhook was not configured."
-        )
-
     try:
-        yield
-    finally:
-        if dispatcher:
-            await dispatcher.storage.close()
-        if bot:
-            await bot.session.close()
+        await bot.send_message(
+            target_id,
+            '<b>Тебе открыт доступ Архивариуса.</b>\n'
+            'Команда /admin открывает панель управления проектом «Последний хранитель». '
+            'Доступ можно отозвать только суперадминистратором.'
+        )
+    except Exception:
+        pass
+    await message.answer(f'Администратор <code>{target_id}</code> добавлен.')
 
 
-web = FastAPI(
-    title="Last Keeper Telegram Bot",
-    version="1.0.0",
-    lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
-)
+@router.callback_query(F.data.startswith('admin:remove-admin:'))
+async def admin_remove_admin(callback: CallbackQuery) -> None:
+    if not is_superadmin(callback.from_user.id):
+        return
+    target_id = int(callback.data.rsplit(':', 1)[1])
+    await callback.answer()
+    await db.execute('DELETE FROM admin_users WHERE telegram_id = ?', (target_id,))
+    await db.log(callback.from_user.id, 'remove_admin', {'target_id': target_id})
+    await callback.message.edit_text(f'Доступ администратора <code>{target_id}</code> отозван.')
 
 
-@web.get("/")
-@web.get("/health")
-async def health() -> dict[str, str]:
-    return {
-        "status": "ok",
-        "bot": bot_username,
-        "mode": "webhook" if settings.public_base_url else "not-configured",
-    }
+@router.message(Command('resetme'))
+async def reset_me(message: Message, state: FSMContext) -> None:
+    if not await is_admin(message.from_user.id):
+        return
+    await db.execute('DELETE FROM personal_progress WHERE user_id = ?', (message.from_user.id,))
+    await db.execute('DELETE FROM users WHERE telegram_id = ?', (message.from_user.id,))
+    await state.clear()
+    await message.answer('Тестовая регистрация удалена. Отправь /start.')
 
 
-@web.post("/telegram/webhook/{secret}")
-async def telegram_webhook(secret: str, request: Request) -> dict[str, bool]:
-    if secret != settings.webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid webhook secret")
-    if not bot or not dispatcher:
-        raise HTTPException(status_code=503, detail="Bot is not ready")
-
-    payload = await request.json()
-    update = Update.model_validate(payload, context={"bot": bot})
-    await dispatcher.feed_update(bot, update)
-    return {"ok": True}
-
-
-async def polling_main() -> None:
-    if not settings.bot_token:
-        raise RuntimeError("BOT_TOKEN is not configured")
-
-    await init_db()
-    local_bot = Bot(
-        settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+@router.message(Command('help'))
+async def help_command(message: Message) -> None:
+    await message.answer(
+        '<b>Что делает цифровой Архивариус</b>\n\n'
+        '• показывает программу и маршрут;\n'
+        '• проводит личные игровые испытания;\n'
+        '• принимает код и командное решение от капитана;\n'
+        '• показывает прогресс без раскрытия скрытых параметров;\n'
+        '• передаёт вопросы организаторам.\n\n'
+        'Основная игра проходит в реальных пространствах Дома Москвы. Бот связывает её фрагменты в единый финал.'
     )
-    local_dispatcher = Dispatcher(storage=MemoryStorage())
-    local_dispatcher.include_router(router)
-    await local_bot.delete_webhook(drop_pending_updates=False)
-
-    me = await local_bot.get_me()
-    log.info("Polling started for @%s", me.username)
-    try:
-        await local_dispatcher.start_polling(local_bot)
-    finally:
-        await local_dispatcher.storage.close()
-        await local_bot.session.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(polling_main())
