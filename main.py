@@ -17,6 +17,7 @@ import admin_access
 import admin_tools
 import app as game
 import expert_ux
+import location_hosts
 import partners
 import production_v4
 import team_quest
@@ -57,6 +58,7 @@ async def configure_telegram() -> None:
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(admin_access.router)
     dispatcher.include_router(production_v4.router)
+    dispatcher.include_router(location_hosts.router)
     dispatcher.include_router(team_quest.router)
     dispatcher.include_router(partners.router)
     dispatcher.include_router(expert_ux.router)
@@ -98,6 +100,17 @@ async def configure_telegram() -> None:
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                         BotCommand(command='cancel', description='Отменить действие'),
                     ], scope=BotCommandScopeChat(chat_id=admin_id))
+            for host_id in await location_hosts.location_host_ids():
+                if host_id in admin_ids:
+                    continue
+                with suppress(Exception):
+                    await bot.set_my_commands([
+                        BotCommand(command='start', description='Открыть Архив'),
+                        BotCommand(command='host', description='Панель ведущего локации'),
+                        BotCommand(command='route', description='Маршрут участника'),
+                        BotCommand(command='program', description='Программа проекта'),
+                        BotCommand(command='whoami', description='Мой Telegram ID'),
+                    ], scope=BotCommandScopeChat(chat_id=host_id))
             for owner_id in settings.superadmin_ids:
                 with suppress(Exception):
                     await bot.set_my_commands([
@@ -137,6 +150,7 @@ async def lifespan(_: FastAPI):
 
     await game.init_application()
     await team_quest.init_team_quest()
+    await location_hosts.init_location_hosts()
     setup_task = asyncio.create_task(configure_telegram())
     try:
         yield
@@ -153,7 +167,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='4.0.0',
+    version='4.1.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
