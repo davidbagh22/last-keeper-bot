@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
 import admin_tools
 import app as game
+import expert_ux
 from config import load_settings
 
 settings = load_settings()
@@ -41,6 +42,9 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
+    # UX-слой подключается первым: он даёт понятный вход, короткие кнопки
+    # и экспертное демо, затем управление получают игровые и админские сценарии.
+    dispatcher.include_router(expert_ux.router)
     dispatcher.include_router(admin_tools.router)
     dispatcher.include_router(game.router)
     webhook_url = f'{settings.public_base_url}{WEBHOOK_PATH}'
@@ -57,15 +61,18 @@ async def configure_telegram() -> None:
             )
             await bot.set_my_commands([
                 BotCommand(command='start', description='Открыть Архив'),
+                BotCommand(command='demo', description='Демо механики за 60 секунд'),
+                BotCommand(command='guide', description='Как проходит игра'),
                 BotCommand(command='program', description='Программа проекта'),
-                BotCommand(command='progress', description='Мой прогресс'),
-                BotCommand(command='help', description='Помощь'),
+                BotCommand(command='progress', description='Мой путь и прогресс'),
+                BotCommand(command='help', description='Помощь и правила'),
             ])
             admin_ids = settings.superadmin_ids | await game.database_admin_ids()
             for admin_id in admin_ids:
                 with suppress(Exception):
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
+                        BotCommand(command='demo', description='Экспертное демо'),
                         BotCommand(command='admin', description='Панель Архивариуса'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                         BotCommand(command='cancel', description='Отменить действие'),
@@ -104,7 +111,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='2.1.0',
+    version='2.2.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
