@@ -1,0 +1,12 @@
+{
+  "source": "Утверждённая программа проекта «Последний хранитель»",
+  "event_dates": ["2026-11-16", "2026-11-17"],
+  "time_slots": ["11:00–11:40", "11:40–12:20", "12:20–13:00", "13:00–13:40", "13:40–14:15"],
+  "routes": {
+    "Красные": ["culture", "science", "history", "memory", "open"],
+    "Белые": ["science", "history", "memory", "open", "culture"],
+    "Оранжевые": ["history", "memory", "open", "culture", "science"],
+    "Зелёные": ["memory", "open", "culture", "science", "history"],
+    "Синие": ["open", "culture", "science", "history", "memory"]
+  }
+}
