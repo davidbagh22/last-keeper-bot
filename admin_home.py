@@ -8,6 +8,7 @@ from aiogram.types import Message
 
 import app as game
 from game_data import TEAM_COLORS
+from ui_text import divider, section, stat
 
 router = Router(name='last_keeper_admin_home')
 
@@ -16,7 +17,10 @@ router = Router(name='last_keeper_admin_home')
 @router.message(Command('admin'))
 async def admin_home(message: Message) -> None:
     if not await game.is_admin(message.from_user.id):
-        await message.answer('Эта часть Архива закрыта.')
+        await message.answer(
+            '🔒 <b>Панель Архивариуса закрыта</b>\n\n'
+            'Доступ есть только у назначенных администраторов проекта.'
+        )
         return
 
     total = await game.db.one('SELECT COUNT(*) AS total FROM users')
@@ -32,31 +36,39 @@ async def admin_home(message: Message) -> None:
     )
 
     lines = [
-        '<b>Панель Архивариуса</b>',
+        '🛡 <b>ПАНЕЛЬ АРХИВАРИУСА</b>',
+        '<i>Единый центр управления участниками и игровым маршрутом</i>',
         '',
-        f'Участников: {total["total"]}',
-        f'Ждут команду: <b>{waiting["total"]}</b>',
-        f'Открытых обращений: {open_requests["total"]}',
+        divider(),
+        section('Сводка', '📌'),
+        stat('Зарегистрировано', total['total'], '👥'),
+        stat('Ждут команду', waiting['total'], '⏳'),
+        stat('Новых обращений', open_requests['total'], '💬'),
         '',
-        '<b>Команды</b>',
+        section('Наполнение команд', '🎨'),
     ]
     lines.extend(
-        f'• {team}: {counts[team]}/{game.settings.team_capacity}'
+        f'• <b>{team}</b> — {counts[team]}/{game.settings.team_capacity}'
         for team in TEAM_COLORS
     )
+    lines.extend([
+        '',
+        divider(),
+        '👇 <b>Выберите действие</b>',
+    ])
 
     buttons = [
-        ('🎛 Управлять прохождением', 'ac:home'),
+        ('🎛 Прохождение команд', 'ac:home'),
         ('🎨 Выдать команду', 'tq:admin:queue'),
-        ('📊 Прогресс команд', 'tq:admin:teams'),
+        ('📊 Общий прогресс', 'tq:admin:teams'),
         ('💬 Обращения', 'admin:support'),
         ('📣 Рассылка', 'admin:broadcast'),
         ('📤 Экспорт', 'admin:export'),
-        ('🦋 Управление финалом', 'admin:final'),
-        ('⚙️ Все функции', 'tq:admin:legacy'),
+        ('🦋 Финал', 'admin:final'),
+        ('⚙️ Дополнительно', 'tq:admin:legacy'),
     ]
     if game.is_superadmin(message.from_user.id):
-        buttons.insert(2, ('👤 Назначить администраторов', 'access:admins'))
+        buttons.insert(2, ('👤 Администраторы', 'access:admins'))
 
     await message.answer(
         '\n'.join(lines),
