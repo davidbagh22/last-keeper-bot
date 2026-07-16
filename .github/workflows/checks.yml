@@ -18,5 +18,5 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m compileall -q app.py admin_tools.py expert_ux.py main.py config.py game_data.py storage.py
+      - run: python -m compileall -q app.py admin_tools.py expert_ux.py main.py config.py game_data.py storage.py route_config.py team_games.py team_quest.py quest_common.py quest_route.py quest_games.py quest_admin.py
       - run: python -m unittest discover -s tests -v
