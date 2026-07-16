@@ -21,7 +21,7 @@ class GateFlow(StatesGroup):
     code = State()
 
 
-def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
+def main_menu(admin: bool = False, host: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text='📍 Текущая точка'), KeyboardButton(text='🎮 10 игр команды')],
         [KeyboardButton(text='🗺 Маршрут'), KeyboardButton(text='📜 Прогресс')],
@@ -29,6 +29,8 @@ def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text='🗓 Программа'), KeyboardButton(text='❓ Архивариус')],
         [KeyboardButton(text='🤝 Партнёры проекта')],
     ]
+    if host:
+        keyboard.append([KeyboardButton(text='🎭 Панель ведущего')])
     if admin:
         keyboard.append([KeyboardButton(text='🛡 Управление проектом')])
     return ReplyKeyboardMarkup(
@@ -41,11 +43,13 @@ def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
 game.main_menu = main_menu
 
 
-def waiting_menu(admin: bool = False) -> ReplyKeyboardMarkup:
+def waiting_menu(admin: bool = False, host: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text='🗓 Программа'), KeyboardButton(text='ℹ️ Как играть')],
         [KeyboardButton(text='🤝 Партнёры проекта')],
     ]
+    if host:
+        keyboard.append([KeyboardButton(text='🎭 Панель ведущего')])
     if admin:
         keyboard.append([KeyboardButton(text='🛡 Управление проектом')])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
@@ -192,11 +196,17 @@ async def require_assigned(message: Message):
         await message.answer('Сначала открой Архив командой /start.')
         return None
     if not is_assigned(user):
+        host = False
+        try:
+            import location_hosts
+            host = await location_hosts.is_location_host(message.from_user.id)
+        except Exception:
+            pass
         await message.answer(
             '<b>Команда ещё не выдана.</b>\n\n'
             'После регистрации Архивариус распределяет участников вручную, чтобы сохранить равные команды. '
             'Когда команда будет назначена, бот пришлёт маршрут автоматически.',
-            reply_markup=waiting_menu(await game.is_admin(message.from_user.id)),
+            reply_markup=waiting_menu(await game.is_admin(message.from_user.id), host),
         )
         return None
     return user
