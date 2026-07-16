@@ -35,15 +35,15 @@ async def send_admin_panel(target: Message) -> None:
         '<b>Наполнение команд</b>',
     ]
     lines.extend(f'• {team}: {counts[team]}/{game.settings.team_capacity}' for team in TEAM_COLORS)
-    await target.answer(
-        '\n'.join(lines),
-        reply_markup=game.inline_buttons([
-            ('🎨 Выдать команду', 'tq:admin:queue'),
-            ('🔢 Коды живых локаций', 'tq:admin:codes'),
-            ('📊 Прогресс команд', 'tq:admin:teams'),
-            ('⚙️ Все функции Архивариуса', 'tq:admin:legacy'),
-        ]),
-    )
+    buttons = [
+        ('🎨 Выдать команду', 'tq:admin:queue'),
+        ('🔢 Коды живых локаций', 'tq:admin:codes'),
+        ('📊 Прогресс команд', 'tq:admin:teams'),
+        ('⚙️ Все функции Архивариуса', 'tq:admin:legacy'),
+    ]
+    if game.is_superadmin(target.from_user.id):
+        buttons.insert(1, ('👤 Управление администраторами', 'access:admins'))
+    await target.answer('\n'.join(lines), reply_markup=game.inline_buttons(buttons))
 
 
 @router.callback_query(F.data == 'tq:admin:legacy')
