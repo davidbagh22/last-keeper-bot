@@ -26,6 +26,7 @@ def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text='📍 Текущая точка'), KeyboardButton(text='🎮 10 игр команды')],
         [KeyboardButton(text='🗺 Маршрут'), KeyboardButton(text='📜 Прогресс')],
         [KeyboardButton(text='🗓 Программа'), KeyboardButton(text='❓ Архивариус')],
+        [KeyboardButton(text='🤝 Партнёры проекта')],
     ]
     if admin:
         keyboard.append([KeyboardButton(text='🛡 Управление проектом')])
@@ -40,7 +41,10 @@ game.main_menu = main_menu
 
 
 def waiting_menu(admin: bool = False) -> ReplyKeyboardMarkup:
-    keyboard = [[KeyboardButton(text='🗓 Программа'), KeyboardButton(text='ℹ️ Как играть')]]
+    keyboard = [
+        [KeyboardButton(text='🗓 Программа'), KeyboardButton(text='ℹ️ Как играть')],
+        [KeyboardButton(text='🤝 Партнёры проекта')],
+    ]
     if admin:
         keyboard.append([KeyboardButton(text='🛡 Управление проектом')])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
