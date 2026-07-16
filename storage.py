@@ -111,6 +111,7 @@ class Database:
             try:
                 for statement in statements:
                     await db.execute(statement)
+                await self._migrate_legacy_schema(db)
                 await db.execute(
                     "INSERT OR IGNORE INTO settings(key, value) VALUES('game_status', 'open')"
                 )
@@ -120,6 +121,31 @@ class Database:
                 await db.commit()
             finally:
                 await db.close()
+
+    async def _migrate_legacy_schema(self, db: aiosqlite.Connection) -> None:
+        required = {
+            'users': {
+                'status': "TEXT NOT NULL DEFAULT 'confirmed'",
+                'consent_at': "TEXT NOT NULL DEFAULT ''",
+            },
+            'team_choices': {
+                'immediate_text': "TEXT NOT NULL DEFAULT ''",
+                'hidden_text': "TEXT NOT NULL DEFAULT ''",
+                'video_symbol': "TEXT NOT NULL DEFAULT ''",
+                'narrator_hint': "TEXT NOT NULL DEFAULT ''",
+            },
+            'support_requests': {
+                'answer': "TEXT NOT NULL DEFAULT ''",
+                'answered_by': 'INTEGER',
+                'answered_at': 'TEXT',
+            },
+        }
+        for table, columns in required.items():
+            cursor = await db.execute(f'PRAGMA table_info({table})')
+            existing = {row[1] for row in await cursor.fetchall()}
+            for name, definition in columns.items():
+                if name not in existing:
+                    await db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
 
     async def execute(self, query: str, params: Iterable[Any] = ()) -> None:
         async with self._write_lock:
