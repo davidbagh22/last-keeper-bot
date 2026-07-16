@@ -19,6 +19,7 @@ import app as game
 import expert_ux
 import location_hosts
 import partners
+import polish_v5
 import production_v4
 import team_quest
 from config import load_settings
@@ -56,6 +57,9 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
+    # Финальный UX-слой подключён первым: он сокращает админ-кнопки,
+    # показывает адреса открытых пространств и блокирует финал до разрешения администратора.
+    dispatcher.include_router(polish_v5.router)
     dispatcher.include_router(admin_access.router)
     dispatcher.include_router(production_v4.router)
     dispatcher.include_router(location_hosts.router)
@@ -78,7 +82,7 @@ async def configure_telegram() -> None:
             )
             await bot.set_my_commands([
                 BotCommand(command='start', description='Открыть Архив'),
-                BotCommand(command='mission', description='Состояние Архива и текущая глава'),
+                BotCommand(command='mission', description='Эффект бабочки — откроется в финале'),
                 BotCommand(command='games', description='10 игр моей команды'),
                 BotCommand(command='collection', description='Моя цифровая коллекция'),
                 BotCommand(command='route', description='Маршрут и текущая точка'),
@@ -93,7 +97,7 @@ async def configure_telegram() -> None:
                 with suppress(Exception):
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
-                        BotCommand(command='admin', description='Постоянная панель управления'),
+                        BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
                         BotCommand(command='games', description='Игры команды'),
                         BotCommand(command='partners', description='Партнёры проекта'),
@@ -167,7 +171,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='4.1.0',
+    version='5.0.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
