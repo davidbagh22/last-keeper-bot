@@ -70,6 +70,24 @@ GAMES_BY_TEAM_LOCATION: dict[tuple[str, str], tuple[TeamGame, ...]] = {
     for location in ('culture', 'science', 'history', 'memory', 'open')
 }
 
+# Ответы в исходных JSON удобно хранить в смысловом порядке, но показывать игроку
+# правильный вариант всегда первым нельзя. Стабильный поворот распределяет его
+# между кнопками 1/2/3 без случайных перестановок между повторными попытками.
+DISPLAY_ROTATIONS: dict[str, int] = {
+    item.game_id: index % len(item.options)
+    for index, item in enumerate(GAMES)
+}
+
+
+def presented_options(item: TeamGame) -> tuple[str, ...]:
+    rotation = DISPLAY_ROTATIONS[item.game_id]
+    return item.options[rotation:] + item.options[:rotation]
+
+
+def presented_correct_index(item: TeamGame) -> int:
+    rotation = DISPLAY_ROTATIONS[item.game_id]
+    return (item.correct - rotation) % len(item.options)
+
 
 def validate_catalog() -> list[str]:
     errors: list[str] = []
@@ -89,4 +107,8 @@ def validate_catalog() -> list[str]:
             errors.append(f'{item.game_id}: неверный индекс ответа')
         if len(item.options) < 2 or len(item.options) > 4:
             errors.append(f'{item.game_id}: допустимо 2-4 варианта')
+        options = presented_options(item)
+        index = presented_correct_index(item)
+        if options[index] != item.options[item.correct]:
+            errors.append(f'{item.game_id}: нарушено соответствие ответа после перестановки')
     return errors
