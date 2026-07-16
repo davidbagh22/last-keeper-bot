@@ -17,11 +17,11 @@ import admin_access
 import admin_tools
 import app as game
 import expert_ux
-import legend_engine
 import location_hosts
 import partners
 import polish_v5
 import production_v4
+import production_v7
 import team_quest
 from config import load_settings
 
@@ -37,15 +37,11 @@ bot: Bot | None = None
 dispatcher: Dispatcher | None = None
 setup_task: asyncio.Task[None] | None = None
 runtime: dict[str, Any] = {
-    'status': 'starting',
-    'bot': None,
-    'webhook': None,
-    'error': None,
+    'status': 'starting', 'bot': None, 'webhook': None, 'error': None,
     'database': settings.database_path,
     'persistent_storage': settings.database_path.startswith('/var/data/'),
     'startup_backup': None,
 }
-
 
 async def configure_telegram() -> None:
     global bot, dispatcher
@@ -55,12 +51,8 @@ async def configure_telegram() -> None:
     if not settings.public_base_url:
         runtime.update(status='missing-url', error='RENDER_EXTERNAL_URL/PUBLIC_BASE_URL is empty')
         return
-
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
-    # Легенды подключены первыми: они принимают личные ценностные выборы
-    # и полностью управляют финальным раскрытием после разрешения Архивариуса.
-    dispatcher.include_router(legend_engine.router)
     dispatcher.include_router(polish_v5.router)
     dispatcher.include_router(admin_access.router)
     dispatcher.include_router(production_v4.router)
@@ -71,21 +63,19 @@ async def configure_telegram() -> None:
     dispatcher.include_router(admin_tools.router)
     dispatcher.include_router(game.router)
     webhook_url = f'{settings.public_base_url}{WEBHOOK_PATH}'
-
     while True:
         try:
             me = await bot.get_me()
             await bot.delete_webhook(drop_pending_updates=False)
             await bot.set_webhook(
-                webhook_url,
-                secret_token=settings.webhook_secret,
+                webhook_url, secret_token=settings.webhook_secret,
                 allowed_updates=dispatcher.resolve_used_update_types(),
                 drop_pending_updates=False,
             )
             await bot.set_my_commands([
                 BotCommand(command='start', description='Открыть Архив'),
-                BotCommand(command='games', description='Игры и личные выборы'),
-                BotCommand(command='legend', description='Моя легенда — откроется в финале'),
+                BotCommand(command='games', description='Игры и дерево решений'),
+                BotCommand(command='legend', description='Моя формирующаяся легенда'),
                 BotCommand(command='collection', description='Моя цифровая коллекция'),
                 BotCommand(command='route', description='Маршрут и текущая точка'),
                 BotCommand(command='progress', description='Мой путь и прогресс'),
@@ -101,9 +91,8 @@ async def configure_telegram() -> None:
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
-                        BotCommand(command='legend', description='Проверить финальные легенды'),
+                        BotCommand(command='legend', description='Проверить дерево легенд'),
                         BotCommand(command='games', description='Игры команды'),
-                        BotCommand(command='partners', description='Партнёры проекта'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                         BotCommand(command='cancel', description='Отменить действие'),
                     ], scope=BotCommandScopeChat(chat_id=admin_id))
@@ -124,7 +113,7 @@ async def configure_telegram() -> None:
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
-                        BotCommand(command='legend', description='Проверить легенды'),
+                        BotCommand(command='legend', description='Проверить дерево легенд'),
                         BotCommand(command='backup', description='Скачать резервную копию базы'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                     ], scope=BotCommandScopeChat(chat_id=owner_id))
@@ -141,24 +130,19 @@ async def configure_telegram() -> None:
             log.exception('Telegram setup failed; retrying in 20 seconds')
             await asyncio.sleep(20)
 
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global setup_task
     database_file = Path(settings.database_path)
     database_file.parent.mkdir(parents=True, exist_ok=True)
     try:
-        runtime['startup_backup'] = await asyncio.to_thread(
-            production_v4.create_startup_backup,
-            settings.database_path,
-        )
+        runtime['startup_backup'] = await asyncio.to_thread(production_v4.create_startup_backup, settings.database_path)
     except Exception as exc:
         log.warning('Startup backup failed: %s', exc)
         runtime['backup_error'] = f'{type(exc).__name__}: {exc}'
-
     await game.init_application()
     await team_quest.init_team_quest()
-    await legend_engine.init_legend_engine()
+    await production_v7.init_v7()
     await location_hosts.init_location_hosts()
     setup_task = asyncio.create_task(configure_telegram())
     try:
@@ -173,16 +157,10 @@ async def lifespan(_: FastAPI):
         if bot:
             await bot.session.close()
 
-
 web = FastAPI(
-    title='Last Keeper Telegram Bot',
-    version='5.1.0',
-    lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
+    title='Last Keeper Telegram Bot', version='7.0.0', lifespan=lifespan,
+    docs_url=None, redoc_url=None, openapi_url=None,
 )
-
 
 @web.get('/')
 @web.get('/health')
@@ -194,10 +172,9 @@ async def health() -> dict[str, Any]:
         database_size_bytes=database_file.stat().st_size if database_file.exists() else 0,
         storage_directory=str(database_file.parent),
         storage_writable=database_file.parent.exists() and database_file.parent.is_dir(),
-        legend_engine='v5.1',
+        decision_tree='v7',
     )
     return result
-
 
 @web.post(WEBHOOK_PATH)
 async def telegram_webhook(
