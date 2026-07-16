@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, Update
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
+import admin_tools
 import app as game
 from config import load_settings
 
@@ -40,6 +41,7 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.include_router(admin_tools.router)
     dispatcher.include_router(game.router)
     webhook_url = f'{settings.public_base_url}{WEBHOOK_PATH}'
 
@@ -102,7 +104,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='2.0.0',
+    version='2.1.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
