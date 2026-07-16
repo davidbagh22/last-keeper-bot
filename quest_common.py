@@ -25,6 +25,7 @@ def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text='📍 Текущая точка'), KeyboardButton(text='🎮 10 игр команды')],
         [KeyboardButton(text='🗺 Маршрут'), KeyboardButton(text='📜 Прогресс')],
+        [KeyboardButton(text='🦋 Состояние Архива'), KeyboardButton(text='🗃 Моя коллекция')],
         [KeyboardButton(text='🗓 Программа'), KeyboardButton(text='❓ Архивариус')],
         [KeyboardButton(text='🤝 Партнёры проекта')],
     ]
