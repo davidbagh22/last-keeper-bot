@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot, Dispatcher
@@ -17,6 +18,7 @@ import admin_tools
 import app as game
 import expert_ux
 import partners
+import production_v4
 import team_quest
 from config import load_settings
 
@@ -31,7 +33,15 @@ WEBHOOK_PATH = '/telegram/webhook'
 bot: Bot | None = None
 dispatcher: Dispatcher | None = None
 setup_task: asyncio.Task[None] | None = None
-runtime: dict[str, Any] = {'status': 'starting', 'bot': None, 'webhook': None, 'error': None}
+runtime: dict[str, Any] = {
+    'status': 'starting',
+    'bot': None,
+    'webhook': None,
+    'error': None,
+    'database': settings.database_path,
+    'persistent_storage': settings.database_path.startswith('/var/data/'),
+    'startup_backup': None,
+}
 
 
 async def configure_telegram() -> None:
@@ -46,6 +56,7 @@ async def configure_telegram() -> None:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(admin_access.router)
+    dispatcher.include_router(production_v4.router)
     dispatcher.include_router(team_quest.router)
     dispatcher.include_router(partners.router)
     dispatcher.include_router(expert_ux.router)
@@ -65,7 +76,9 @@ async def configure_telegram() -> None:
             )
             await bot.set_my_commands([
                 BotCommand(command='start', description='Открыть Архив'),
+                BotCommand(command='mission', description='Состояние Архива и текущая глава'),
                 BotCommand(command='games', description='10 игр моей команды'),
+                BotCommand(command='collection', description='Моя цифровая коллекция'),
                 BotCommand(command='route', description='Маршрут и текущая точка'),
                 BotCommand(command='progress', description='Мой путь и прогресс'),
                 BotCommand(command='program', description='Программа проекта'),
@@ -79,11 +92,21 @@ async def configure_telegram() -> None:
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Постоянная панель управления'),
+                        BotCommand(command='ops', description='Оперативная карта команд'),
                         BotCommand(command='games', description='Игры команды'),
                         BotCommand(command='partners', description='Партнёры проекта'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                         BotCommand(command='cancel', description='Отменить действие'),
                     ], scope=BotCommandScopeChat(chat_id=admin_id))
+            for owner_id in settings.superadmin_ids:
+                with suppress(Exception):
+                    await bot.set_my_commands([
+                        BotCommand(command='start', description='Открыть Архив'),
+                        BotCommand(command='admin', description='Панель управления'),
+                        BotCommand(command='ops', description='Оперативная карта команд'),
+                        BotCommand(command='backup', description='Скачать резервную копию базы'),
+                        BotCommand(command='whoami', description='Мой Telegram ID'),
+                    ], scope=BotCommandScopeChat(chat_id=owner_id))
             info = await bot.get_webhook_info()
             if info.url != webhook_url:
                 raise RuntimeError(f'Telegram returned another webhook URL: {info.url!r}')
@@ -101,6 +124,17 @@ async def configure_telegram() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global setup_task
+    database_file = Path(settings.database_path)
+    database_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        runtime['startup_backup'] = await asyncio.to_thread(
+            production_v4.create_startup_backup,
+            settings.database_path,
+        )
+    except Exception as exc:
+        log.warning('Startup backup failed: %s', exc)
+        runtime['backup_error'] = f'{type(exc).__name__}: {exc}'
+
     await game.init_application()
     await team_quest.init_team_quest()
     setup_task = asyncio.create_task(configure_telegram())
@@ -119,7 +153,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='3.2.0',
+    version='4.0.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -130,7 +164,15 @@ web = FastAPI(
 @web.get('/')
 @web.get('/health')
 async def health() -> dict[str, Any]:
-    return runtime
+    database_file = Path(settings.database_path)
+    result = dict(runtime)
+    result.update(
+        database_exists=database_file.exists(),
+        database_size_bytes=database_file.stat().st_size if database_file.exists() else 0,
+        storage_directory=str(database_file.parent),
+        storage_writable=database_file.parent.exists() and database_file.parent.is_dir(),
+    )
+    return result
 
 
 @web.post(WEBHOOK_PATH)
