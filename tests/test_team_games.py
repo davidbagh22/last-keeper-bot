@@ -2,7 +2,15 @@ import unittest
 
 from game_data import TEAM_COLORS
 from route_config import ROUTES
-from team_games import GAMES, GAMES_BY_ID, GAMES_BY_TEAM_LOCATION, TEAM_GAMES, validate_catalog
+from team_games import (
+    GAMES,
+    GAMES_BY_ID,
+    GAMES_BY_TEAM_LOCATION,
+    TEAM_GAMES,
+    presented_correct_index,
+    presented_options,
+    validate_catalog,
+)
 
 
 class TeamGameCatalogTests(unittest.TestCase):
@@ -31,6 +39,19 @@ class TeamGameCatalogTests(unittest.TestCase):
             self.assertGreaterEqual(len(item.options), 2)
             self.assertLessEqual(len(item.options), 4)
             self.assertIn(item.correct, range(len(item.options)))
+
+    def test_correct_answer_is_not_always_the_first_button(self):
+        for team in TEAM_COLORS:
+            positions = [presented_correct_index(item) for item in TEAM_GAMES[team]]
+            self.assertGreater(len(set(positions)), 1, team)
+            self.assertIn(0, positions)
+            self.assertTrue(any(position > 0 for position in positions))
+
+    def test_rotation_preserves_the_real_answer(self):
+        for item in GAMES:
+            shown = presented_options(item)
+            shown_correct = presented_correct_index(item)
+            self.assertEqual(shown[shown_correct], item.options[item.correct])
 
 
 if __name__ == '__main__':
