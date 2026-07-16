@@ -4,10 +4,14 @@ from aiogram import Router
 
 import quest_admin
 import quest_common
+import quest_control
 import quest_games
 import quest_route
 
 router = Router(name='last_keeper_team_quest')
+# Центр управления подключается первым: он заменяет ввод кодов участниками
+# на подтверждение этапов Архивариусом и перехватывает экран текущей точки.
+router.include_router(quest_control.router)
 router.include_router(quest_route.router)
 router.include_router(quest_games.router)
 router.include_router(quest_admin.router)
