@@ -8,9 +8,11 @@ from aiogram.types import CallbackQuery, Message
 
 import app as game
 import production_v6
+import v6_aliases
 from game_data import TEAM_COLORS
 
 router = Router(name='last_keeper_polish_v5')
+router.include_router(v6_aliases.router)
 router.include_router(production_v6.router)
 
 OPEN_SPACES_TEXT = (
