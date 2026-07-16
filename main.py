@@ -17,6 +17,7 @@ import admin_access
 import admin_tools
 import app as game
 import expert_ux
+import legend_engine
 import location_hosts
 import partners
 import polish_v5
@@ -57,8 +58,9 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
-    # Финальный UX-слой подключён первым: он сокращает админ-кнопки,
-    # показывает адреса открытых пространств и блокирует финал до разрешения администратора.
+    # Легенды подключены первыми: они принимают личные ценностные выборы
+    # и полностью управляют финальным раскрытием после разрешения Архивариуса.
+    dispatcher.include_router(legend_engine.router)
     dispatcher.include_router(polish_v5.router)
     dispatcher.include_router(admin_access.router)
     dispatcher.include_router(production_v4.router)
@@ -82,8 +84,8 @@ async def configure_telegram() -> None:
             )
             await bot.set_my_commands([
                 BotCommand(command='start', description='Открыть Архив'),
-                BotCommand(command='mission', description='Эффект бабочки — откроется в финале'),
-                BotCommand(command='games', description='10 игр моей команды'),
+                BotCommand(command='games', description='Игры и личные выборы'),
+                BotCommand(command='legend', description='Моя легенда — откроется в финале'),
                 BotCommand(command='collection', description='Моя цифровая коллекция'),
                 BotCommand(command='route', description='Маршрут и текущая точка'),
                 BotCommand(command='progress', description='Мой путь и прогресс'),
@@ -99,6 +101,7 @@ async def configure_telegram() -> None:
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
+                        BotCommand(command='legend', description='Проверить финальные легенды'),
                         BotCommand(command='games', description='Игры команды'),
                         BotCommand(command='partners', description='Партнёры проекта'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
@@ -121,6 +124,7 @@ async def configure_telegram() -> None:
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
+                        BotCommand(command='legend', description='Проверить легенды'),
                         BotCommand(command='backup', description='Скачать резервную копию базы'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                     ], scope=BotCommandScopeChat(chat_id=owner_id))
@@ -154,6 +158,7 @@ async def lifespan(_: FastAPI):
 
     await game.init_application()
     await team_quest.init_team_quest()
+    await legend_engine.init_legend_engine()
     await location_hosts.init_location_hosts()
     setup_task = asyncio.create_task(configure_telegram())
     try:
@@ -171,7 +176,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='5.0.0',
+    version='5.1.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -189,6 +194,7 @@ async def health() -> dict[str, Any]:
         database_size_bytes=database_file.stat().st_size if database_file.exists() else 0,
         storage_directory=str(database_file.parent),
         storage_writable=database_file.parent.exists() and database_file.parent.is_dir(),
+        legend_engine='v5.1',
     )
     return result
 
