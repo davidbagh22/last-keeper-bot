@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 import app as game
 from quest_common import *
-from team_games import GAMES_BY_ID
+from team_games import GAMES_BY_ID, presented_correct_index, presented_options
 
 router = Router(name='last_keeper_team_games')
 
@@ -73,14 +73,15 @@ async def open_game(callback: CallbackQuery) -> None:
     if existing and existing['passed']:
         await callback.answer('Эта миссия уже пройдена.', show_alert=True)
         return
+    options = presented_options(item)
     await callback.answer()
     await callback.message.answer(
         f'<b>{game.escape(item.title)}</b>\n'
         f'<i>{game.escape(item.mechanic)} · {LOCATION_TITLES[item.location]}</i>\n\n'
         f'{game.escape(item.prompt)}\n\n'
-        f'{option_text(item.options)}\n\n'
+        f'{option_text(options)}\n\n'
         '<i>Полные ответы находятся в сообщении. На кнопках - только номера.</i>',
-        reply_markup=option_keyboard(f'tq:answer:{item.game_id}', len(item.options)),
+        reply_markup=option_keyboard(f'tq:answer:{item.game_id}', len(options)),
     )
 
 
@@ -98,14 +99,15 @@ async def answer_game(callback: CallbackQuery) -> None:
     if not await game_is_unlocked(user, item):
         await callback.answer('Эта миссия пока закрыта.', show_alert=True)
         return
-    if answer_index >= len(item.options):
+    options = presented_options(item)
+    if answer_index >= len(options):
         return
     existing = await game.db.one(
         'SELECT attempts, passed FROM team_game_progress WHERE user_id = ? AND game_id = ?',
         (callback.from_user.id, game_id),
     )
     attempts = int(existing['attempts']) + 1 if existing else 1
-    correct = answer_index == item.correct
+    correct = answer_index == presented_correct_index(item)
     await game.db.execute(
         '''INSERT INTO team_game_progress(user_id, game_id, attempts, passed, completed_at)
            VALUES(?, ?, ?, ?, ?)
@@ -116,7 +118,7 @@ async def answer_game(callback: CallbackQuery) -> None:
         (callback.from_user.id, game_id, attempts, 1 if correct else 0, utcnow() if correct else None),
     )
     await callback.answer()
-    selected = game.escape(item.options[answer_index])
+    selected = game.escape(options[answer_index])
     if correct:
         passed = len(await passed_games(callback.from_user.id))
         await callback.message.edit_text(
