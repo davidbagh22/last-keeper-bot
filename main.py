@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 import admin_tools
 import app as game
 import expert_ux
+import team_quest
 from config import load_settings
 
 settings = load_settings()
@@ -42,8 +43,9 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
-    # UX-слой подключается первым: он даёт понятный вход, короткие кнопки
-    # и экспертное демо, затем управление получают игровые и админские сценарии.
+    # Сначала подключается жёсткий командный маршрут: ручная выдача команд,
+    # цифровые коды и 50 уникальных игр. Затем - демо, сервисные и старые сценарии.
+    dispatcher.include_router(team_quest.router)
     dispatcher.include_router(expert_ux.router)
     dispatcher.include_router(admin_tools.router)
     dispatcher.include_router(game.router)
@@ -61,19 +63,20 @@ async def configure_telegram() -> None:
             )
             await bot.set_my_commands([
                 BotCommand(command='start', description='Открыть Архив'),
-                BotCommand(command='demo', description='Демо механики за 60 секунд'),
-                BotCommand(command='guide', description='Как проходит игра'),
-                BotCommand(command='program', description='Программа проекта'),
+                BotCommand(command='games', description='10 игр моей команды'),
+                BotCommand(command='route', description='Маршрут и текущая точка'),
                 BotCommand(command='progress', description='Мой путь и прогресс'),
-                BotCommand(command='help', description='Помощь и правила'),
+                BotCommand(command='program', description='Программа проекта'),
+                BotCommand(command='demo', description='Демо механики за 60 секунд'),
+                BotCommand(command='help', description='Как проходит игра'),
             ])
             admin_ids = settings.superadmin_ids | await game.database_admin_ids()
             for admin_id in admin_ids:
                 with suppress(Exception):
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
-                        BotCommand(command='demo', description='Экспертное демо'),
-                        BotCommand(command='admin', description='Панель Архивариуса'),
+                        BotCommand(command='admin', description='Выдать команды и проверить маршрут'),
+                        BotCommand(command='games', description='Игры команды'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                         BotCommand(command='cancel', description='Отменить действие'),
                     ], scope=BotCommandScopeChat(chat_id=admin_id))
@@ -95,6 +98,7 @@ async def configure_telegram() -> None:
 async def lifespan(_: FastAPI):
     global setup_task
     await game.init_application()
+    await team_quest.init_team_quest()
     setup_task = asyncio.create_task(configure_telegram())
     try:
         yield
@@ -111,7 +115,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='2.2.0',
+    version='3.0.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
