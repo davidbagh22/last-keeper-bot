@@ -2,7 +2,30 @@ services:
   - type: web
     name: last-keeper-bot
     runtime: docker
+    region: frankfurt
+    plan: free
+    autoDeployTrigger: commit
     healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
         sync: false
+      - key: ADMIN_IDS
+        value: "1593868942"
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: DATABASE_PATH
+        value: /tmp/last_keeper.db
+      - key: EVENT_DATES
+        value: "2026-11-16,2026-11-17"
+      - key: TEAM_CAPACITY
+        value: "30"
+      - key: LOCATION_CODE_CULTURE
+        value: CULT26
+      - key: LOCATION_CODE_SCIENCE
+        value: SCI26
+      - key: LOCATION_CODE_HISTORY
+        value: HIST26
+      - key: LOCATION_CODE_MEMORY
+        value: MEM26
+      - key: LOG_LEVEL
+        value: INFO
