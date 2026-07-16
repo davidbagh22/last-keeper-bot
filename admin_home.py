@@ -34,6 +34,7 @@ async def admin_home(message: Message) -> None:
     open_requests = await game.db.one(
         "SELECT COUNT(*) AS total FROM support_requests WHERE status = 'open'"
     )
+    hosts = await game.db.one('SELECT COUNT(*) AS total FROM location_hosts')
 
     lines = [
         '🛡 <b>ПАНЕЛЬ АРХИВАРИУСА</b>',
@@ -43,6 +44,7 @@ async def admin_home(message: Message) -> None:
         section('Сводка', '📌'),
         stat('Зарегистрировано', total['total'], '👥'),
         stat('Ждут команду', waiting['total'], '⏳'),
+        stat('Ведущих локаций', hosts['total'], '🎭'),
         stat('Новых обращений', open_requests['total'], '💬'),
         '',
         section('Наполнение команд', '🎨'),
@@ -68,7 +70,8 @@ async def admin_home(message: Message) -> None:
         ('⚙️ Дополнительно', 'tq:admin:legacy'),
     ]
     if game.is_superadmin(message.from_user.id):
-        buttons.insert(2, ('👤 Администраторы', 'access:admins'))
+        buttons.insert(2, ('🎭 Ведущие локаций', 'lh:admin:list'))
+        buttons.insert(3, ('👤 Администраторы', 'access:admins'))
 
     await message.answer(
         '\n'.join(lines),
