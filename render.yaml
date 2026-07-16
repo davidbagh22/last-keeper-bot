@@ -3,3 +3,6 @@ services:
     name: last-keeper-bot
     runtime: docker
     healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
