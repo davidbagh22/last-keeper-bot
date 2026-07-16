@@ -15,12 +15,9 @@ from team_games import GAMES_BY_ID
 router = Router(name='last_keeper_production_v6')
 
 SPACES = (
-    ('pushkin', 'Пушкин. Код слова'),
-    ('catherine', 'Екатерина Великая. Кабинет эпохи'),
-    ('culture', 'Культурный код России'),
-    ('gagarin', 'Гагарин. Первый шаг'),
-    ('memory', 'Лица памяти'),
-    ('vr_izba', 'VR: Русская изба'),
+    ('pushkin', 'Пушкин. Код слова'), ('catherine', 'Екатерина Великая. Кабинет эпохи'),
+    ('culture', 'Культурный код России'), ('gagarin', 'Гагарин. Первый шаг'),
+    ('memory', 'Лица памяти'), ('vr_izba', 'VR: Русская изба'),
     ('vr_history', 'VR: История России'),
 )
 
@@ -57,6 +54,7 @@ async def init_v6() -> None:
 
 @router.callback_query(F.data == 'v6:spaces')
 async def spaces_start(callback: CallbackQuery) -> None:
+    await init_v6()
     user = await game.get_user(callback.from_user.id)
     if not is_assigned(user):
         await callback.answer('Сначала получите команду.', show_alert=True)
@@ -75,12 +73,12 @@ async def space_selected(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(space_key=key)
     await state.set_state(SpaceFlow.question)
     await callback.answer()
-    await callback.message.answer(
-        f'<b>{game.escape(dict(SPACES)[key])}</b>\n\nНапишите вопрос, который команда уносит из этого пространства. Начните с мысли «мы задумались, почему…».')
+    await callback.message.answer(f'<b>{game.escape(dict(SPACES)[key])}</b>\n\nНапишите вопрос, который команда уносит из этого пространства. Начните с мысли «мы задумались, почему…».')
 
 
 @router.message(SpaceFlow.question)
 async def save_reflection(message: Message, state: FSMContext) -> None:
+    await init_v6()
     user = await game.get_user(message.from_user.id)
     text = (message.text or '').strip()
     if not is_assigned(user) or len(text) < 15:
@@ -109,6 +107,7 @@ async def host_script(callback: CallbackQuery) -> None:
 
 
 async def final_report(target: Message, user_id: int) -> None:
+    await init_v6()
     user = await game.get_user(user_id)
     if not is_assigned(user):
         await target.answer('Финал откроется после назначения команды.')
@@ -131,7 +130,41 @@ async def final_report(target: Message, user_id: int) -> None:
         lines += ['', '<b>Что команда помогла сохранить</b>', *(f'• {game.escape(item)}' for item in themes)]
     if reflection:
         lines += ['', '<b>Вопрос, который команда уносит дальше</b>', f'«{game.escape(reflection["question_text"])}»']
+    lines += ['', '<i>Итог собран из живого маршрута, цифровых миссий, решений и вопроса открытых пространств.</i>']
     await target.answer('\n'.join(lines))
+
+
+async def stats_text() -> str:
+    await init_v6()
+    total = await game.db.one('SELECT COUNT(*) AS total FROM users')
+    games = await game.db.one('SELECT COUNT(*) AS total FROM team_game_progress WHERE passed=1')
+    questions = await game.db.one('SELECT COUNT(*) AS total FROM open_space_reflections')
+    support = await game.db.one('SELECT COUNT(*) AS total FROM support_requests')
+    return ('<b>Статистика проекта</b>\n\n'
+        f'Участников: <b>{total["total"]}</b>\nПройдено игр: <b>{games["total"]}</b>\n'
+        f'Командных вопросов: <b>{questions["total"]}</b>\nОбращений: <b>{support["total"]}</b>')
+
+
+@router.callback_query(F.data == 'v6:stats')
+async def stats_callback(callback: CallbackQuery) -> None:
+    if not await game.is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await callback.message.answer(await stats_text())
+
+
+@router.callback_query(F.data == 'v6:emergency')
+async def emergency_callback(callback: CallbackQuery) -> None:
+    if not await game.is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await callback.message.answer(
+        '<b>Аварийный режим</b>\n\nИспользуйте только при реальном сбое.',
+        reply_markup=game.inline_buttons([
+            ('⏸ Пауза', 'admin:pause'), ('▶️ Продолжить', 'admin:resume'),
+            ('🎛 Команды', 'ac:home'), ('📣 Рассылка', 'admin:broadcast'),
+            ('📊 Прогресс', 'tq:admin:teams'), ('💬 Вопросы', 'admin:support'),
+        ], columns=2))
 
 
 @router.callback_query(F.data == 'v6:final')
