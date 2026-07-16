@@ -7,13 +7,14 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 import app as game
-import legend_engine
 import production_v6
+import production_v7
 import v6_aliases
 from game_data import TEAM_COLORS
 
 router = Router(name='last_keeper_polish_v5')
 router.include_router(v6_aliases.router)
+router.include_router(production_v7.router)
 router.include_router(production_v6.router)
 
 OPEN_SPACES_TEXT = (
@@ -29,7 +30,6 @@ OPEN_SPACES_TEXT = (
     '<b>Задача команды</b>\nВыберите пространство, после которого возник новый вопрос или неожиданная связь.'
 )
 
-
 @router.callback_query(F.data == 'program:spaces')
 async def open_spaces(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -41,7 +41,6 @@ async def open_spaces(callback: CallbackQuery) -> None:
             ('📍 Сейчас', 'tq:current'),
         ]),
     )
-
 
 async def send_compact_admin(target: Message, user_id: int) -> None:
     if not await game.is_admin(user_id):
@@ -72,20 +71,17 @@ async def send_compact_admin(target: Message, user_id: int) -> None:
         reply_markup=game.inline_buttons(buttons, columns=2),
     )
 
-
 @router.message(Command('admin'))
 @router.message(F.text == '🛡 Управление проектом')
 async def compact_admin(message: Message) -> None:
     await send_compact_admin(message, message.from_user.id)
 
-
 @router.message(Command('mission'))
 @router.message(F.text.in_({'◻️ Эффект бабочки', '🦋 Состояние Архива', '🦋 Эффект бабочки', '◻️ Моя легенда', '🦋 Моя легенда'}))
 async def final_message(message: Message) -> None:
-    await legend_engine.reveal_final(message, message.from_user.id)
+    await production_v7.final_report(message, message.from_user.id)
 
-
-@router.callback_query(F.data.in_({'v4:mission', 'progress:final'}))
+@router.callback_query(F.data.in_({'v4:mission', 'progress:final', 'v6:final'}))
 async def final_callback(callback: CallbackQuery) -> None:
     await callback.answer()
-    await legend_engine.reveal_final(callback.message, callback.from_user.id)
+    await production_v7.final_report(callback.message, callback.from_user.id)
