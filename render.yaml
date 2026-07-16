@@ -3,9 +3,13 @@ services:
     name: last-keeper-bot
     runtime: docker
     region: frankfurt
-    plan: free
+    plan: starter
     autoDeployTrigger: commit
     healthCheckPath: /health
+    disk:
+      name: last-keeper-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: BOT_TOKEN
         sync: false
@@ -14,7 +18,7 @@ services:
       - key: WEBHOOK_SECRET
         generateValue: true
       - key: DATABASE_PATH
-        value: /tmp/last_keeper.db
+        value: /var/data/last_keeper.db
       - key: EVENT_DATES
         value: "2026-11-16,2026-11-17"
       - key: TEAM_CAPACITY
