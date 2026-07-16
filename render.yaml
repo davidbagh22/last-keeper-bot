@@ -1,0 +1,5 @@
+services:
+  - type: web
+    name: last-keeper-bot
+    runtime: docker
+    healthCheckPath: /health
