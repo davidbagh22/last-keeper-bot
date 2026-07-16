@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 import admin_tools
 import app as game
 import expert_ux
+import partners
 import team_quest
 from config import load_settings
 
@@ -44,8 +45,9 @@ async def configure_telegram() -> None:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
     # Сначала подключается жёсткий командный маршрут: ручная выдача команд,
-    # цифровые коды и 50 уникальных игр. Затем - демо, сервисные и старые сценарии.
+    # цифровые коды и 50 уникальных игр. Затем - партнёры, демо и сервисные сценарии.
     dispatcher.include_router(team_quest.router)
+    dispatcher.include_router(partners.router)
     dispatcher.include_router(expert_ux.router)
     dispatcher.include_router(admin_tools.router)
     dispatcher.include_router(game.router)
@@ -67,6 +69,7 @@ async def configure_telegram() -> None:
                 BotCommand(command='route', description='Маршрут и текущая точка'),
                 BotCommand(command='progress', description='Мой путь и прогресс'),
                 BotCommand(command='program', description='Программа проекта'),
+                BotCommand(command='partners', description='Партнёры проекта'),
                 BotCommand(command='demo', description='Демо механики за 60 секунд'),
                 BotCommand(command='help', description='Как проходит игра'),
             ])
@@ -77,6 +80,7 @@ async def configure_telegram() -> None:
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Выдать команды и проверить маршрут'),
                         BotCommand(command='games', description='Игры команды'),
+                        BotCommand(command='partners', description='Партнёры проекта'),
                         BotCommand(command='whoami', description='Мой Telegram ID'),
                         BotCommand(command='cancel', description='Отменить действие'),
                     ], scope=BotCommandScopeChat(chat_id=admin_id))
@@ -115,7 +119,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='3.0.0',
+    version='3.1.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
