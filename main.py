@@ -20,6 +20,7 @@ import expert_ux
 import location_hosts
 import partners
 import polish_v5
+import presentation_demo
 import production_v4
 import production_v7
 import team_quest
@@ -53,6 +54,7 @@ async def configure_telegram() -> None:
         return
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.include_router(presentation_demo.router)
     dispatcher.include_router(polish_v5.router)
     dispatcher.include_router(admin_access.router)
     dispatcher.include_router(production_v4.router)
@@ -81,7 +83,6 @@ async def configure_telegram() -> None:
                 BotCommand(command='progress', description='Мой путь и прогресс'),
                 BotCommand(command='program', description='Программа проекта'),
                 BotCommand(command='partners', description='Партнёры проекта'),
-                BotCommand(command='demo', description='Демо механики за 60 секунд'),
                 BotCommand(command='help', description='Как проходит игра'),
             ])
             admin_ids = settings.superadmin_ids | await game.database_admin_ids()
@@ -90,6 +91,7 @@ async def configure_telegram() -> None:
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Панель управления'),
+                        BotCommand(command='showmode', description='Режим презентации и игры'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
                         BotCommand(command='legend', description='Проверить дерево легенд'),
                         BotCommand(command='games', description='Игры команды'),
@@ -112,6 +114,7 @@ async def configure_telegram() -> None:
                     await bot.set_my_commands([
                         BotCommand(command='start', description='Открыть Архив'),
                         BotCommand(command='admin', description='Панель управления'),
+                        BotCommand(command='showmode', description='Режим презентации и игры'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
                         BotCommand(command='legend', description='Проверить дерево легенд'),
                         BotCommand(command='backup', description='Скачать резервную копию базы'),
@@ -143,6 +146,7 @@ async def lifespan(_: FastAPI):
     await game.init_application()
     await team_quest.init_team_quest()
     await production_v7.init_v7()
+    await presentation_demo.init_presentation_demo()
     await location_hosts.init_location_hosts()
     setup_task = asyncio.create_task(configure_telegram())
     try:
@@ -158,7 +162,7 @@ async def lifespan(_: FastAPI):
             await bot.session.close()
 
 web = FastAPI(
-    title='Last Keeper Telegram Bot', version='7.0.0', lifespan=lifespan,
+    title='Last Keeper Telegram Bot', version='8.0.0', lifespan=lifespan,
     docs_url=None, redoc_url=None, openapi_url=None,
 )
 
@@ -173,6 +177,9 @@ async def health() -> dict[str, Any]:
         storage_directory=str(database_file.parent),
         storage_writable=database_file.parent.exists() and database_file.parent.is_dir(),
         decision_tree='v7',
+        presentation_demo='v8',
+        showcase_mode=await game.db.setting('showcase_mode', 'mixed'),
+        demo_enabled=await game.db.setting('demo_enabled', '1'),
     )
     return result
 
