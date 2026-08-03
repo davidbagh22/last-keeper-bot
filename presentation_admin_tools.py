@@ -5,7 +5,6 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 import app as game
-from demo_visuals import visual
 
 router = Router(name='presentation_admin_tools')
 
@@ -33,7 +32,6 @@ async def _panel(target: Message) -> None:
             ('Вкл./выкл. демо', 'show:toggle-demo'),
             ('↻ Моё демо', 'show:restart-self'),
             ('♻️ Сбросить всем', 'show:restart-all'),
-            ('🖼 Проверить визуалы', 'show:visual-preview'),
         ], columns=2),
     )
 
@@ -84,18 +82,3 @@ async def restart_all(callback: CallbackQuery) -> None:
         "UPDATE presentation_demo_sessions SET first_choice='', second_choice='', stage='', attempts=0, completed_at=NULL"
     )
     await callback.answer('Демо сброшено всем участникам', show_alert=True)
-
-
-@router.callback_query(F.data == 'show:visual-preview')
-async def visual_preview(callback: CallbackQuery) -> None:
-    if not await game.is_admin(callback.from_user.id):
-        return
-    await callback.answer()
-    for kind, caption in (
-        ('entry', '01 · Вход в Архив'),
-        ('scan', '02 · Сканирование'),
-        ('riddle', '03 · Живой ключ'),
-        ('restored', '04 · Фрагмент восстановлен'),
-        ('finale', '05 · Финальная легенда'),
-    ):
-        await callback.message.answer_photo(visual(kind), caption=f'<b>{caption}</b>')
