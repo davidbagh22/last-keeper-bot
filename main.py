@@ -22,7 +22,6 @@ import partners
 import polish_v5
 import presentation_admin_tools
 import presentation_demo
-import presentation_gate
 import production_v4
 import production_v7
 import team_quest
@@ -58,7 +57,6 @@ async def configure_telegram() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage())
-    dispatcher.include_router(presentation_gate.router)
     dispatcher.include_router(presentation_admin_tools.router)
     dispatcher.include_router(presentation_demo.router)
     dispatcher.include_router(polish_v5.router)
@@ -101,7 +99,6 @@ async def configure_telegram() -> None:
                         BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='showmode', description='Режим презентации'),
                         BotCommand(command='demorestart', description='Перезапустить демо'),
-                        BotCommand(command='gate', description='Код со слайда'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
                         BotCommand(command='legend', description='Проверить дерево легенд'),
                         BotCommand(command='games', description='Игры команды'),
@@ -126,7 +123,6 @@ async def configure_telegram() -> None:
                         BotCommand(command='admin', description='Панель управления'),
                         BotCommand(command='showmode', description='Режим презентации'),
                         BotCommand(command='demorestart', description='Перезапустить демо'),
-                        BotCommand(command='gate', description='Код со слайда'),
                         BotCommand(command='ops', description='Оперативная карта команд'),
                         BotCommand(command='legend', description='Проверить дерево легенд'),
                         BotCommand(command='backup', description='Скачать резервную копию базы'),
@@ -164,8 +160,6 @@ async def lifespan(_: FastAPI):
     await team_quest.init_team_quest()
     await production_v7.init_v7()
     await presentation_demo.init_presentation_demo()
-    if not await game.db.setting('presentation_gate_enabled', ''):
-        await game.db.set_setting('presentation_gate_enabled', '1')
     await location_hosts.init_location_hosts()
     setup_task = asyncio.create_task(configure_telegram())
     try:
@@ -183,7 +177,7 @@ async def lifespan(_: FastAPI):
 
 web = FastAPI(
     title='Last Keeper Telegram Bot',
-    version='8.2.0',
+    version='8.3.0',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -202,8 +196,7 @@ async def health() -> dict[str, Any]:
         storage_directory=str(database_file.parent),
         storage_writable=database_file.parent.exists() and database_file.parent.is_dir(),
         decision_tree='v7',
-        presentation_demo='v8.2',
-        presentation_gate=await game.db.setting('presentation_gate_enabled', '1'),
+        presentation_demo='v8.3',
         showcase_mode=await game.db.setting('showcase_mode', 'mixed'),
     )
     return result
