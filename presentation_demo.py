@@ -6,12 +6,17 @@ from dataclasses import dataclass
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 import app as game
 from storage import utcnow
 
 router = Router(name='last_keeper_presentation_demo')
+
+
+class DemoFlow(StatesGroup):
+    live_key = State()
 
 
 @dataclass(frozen=True)
@@ -23,29 +28,14 @@ class DemoChoice:
 
 
 FIRST_CHOICES = (
-    DemoChoice(
-        'word',
-        'Сохранить слово',
-        'Вы сохранили язык — пространство, в котором поколения России продолжают понимать друг друга.',
-        'Живое слово',
-    ),
-    DemoChoice(
-        'discovery',
-        'Сохранить открытие',
-        'Вы сохранили научный импульс — способность России превращать мечту в следующий шаг человечества.',
-        'Будущее',
-    ),
-    DemoChoice(
-        'memory',
-        'Сохранить имя',
-        'Вы сохранили человеческую историю — потому что память начинается не с даты, а с человека.',
-        'Человеческий голос',
-    ),
+    DemoChoice('word', 'Сохранить слово', 'Вы сохранили язык — пространство, в котором поколения продолжают понимать друг друга.', 'Живое слово'),
+    DemoChoice('discovery', 'Сохранить открытие', 'Вы сохранили научный импульс — способность превращать мечту в следующий шаг человечества.', 'Будущее'),
+    DemoChoice('memory', 'Сохранить имя', 'Вы сохранили человеческую историю — потому что память начинается не с даты, а с человека.', 'Человеческий голос'),
 )
 
 SECOND_BRANCHES = {
     'word': (
-        'Вы выбрали слово. Теперь решите, как передать наследие так, чтобы оно не стало музейной тишиной.',
+        'Вы выбрали слово. Как передать наследие так, чтобы оно не стало музейной тишиной?',
         (
             DemoChoice('original', 'Сохранить оригинал', 'Подлинная речь эпохи осталась нетронутой.', 'Память'),
             DemoChoice('living', 'Объяснить современно', 'Смысл стал понятнее новому поколению.', 'Живое слово'),
@@ -53,7 +43,7 @@ SECOND_BRANCHES = {
         ),
     ),
     'discovery': (
-        'Вы выбрали открытие. Теперь решите, что именно должно пережить время вместе с ним.',
+        'Вы выбрали открытие. Что должно пережить время вместе с ним?',
         (
             DemoChoice('fact', 'Точный факт', 'Архив сохранил проверенные координаты события.', 'Точность'),
             DemoChoice('person', 'Историю человека', 'За достижением сохранились характер, сомнения и смелость.', 'Человеческий голос'),
@@ -61,7 +51,7 @@ SECOND_BRANCHES = {
         ),
     ),
     'memory': (
-        'Вы выбрали имя. Теперь решите, как личная судьба должна войти в общую историю.',
+        'Вы выбрали имя. Как личная судьба должна войти в общую историю?',
         (
             DemoChoice('voice', 'Сохранить голос', 'Свидетельство осталось живым и личным.', 'Человеческий голос'),
             DemoChoice('context', 'Добавить контекст', 'Личная история стала частью большой картины.', 'Точность'),
@@ -79,7 +69,7 @@ LEGENDS = {
     ('discovery', 'future'): ('Архитектор будущего', 'Вы превращаете память о достижении в импульс к новому.'),
     ('memory', 'voice'): ('Собиратель живых голосов', 'Вы возвращаете истории человеческое присутствие.'),
     ('memory', 'context'): ('Хранитель целостной памяти', 'Вы соединяете личную судьбу и историческую правду.'),
-    ('memory', 'dialogue'): ('Связующий поколения', 'Вы делаете память предметом личного разговора, а не формального знания.'),
+    ('memory', 'dialogue'): ('Связующий поколения', 'Вы делаете память личным разговором, а не формальным знанием.'),
 }
 
 QUOTE_OPENINGS = (
@@ -152,8 +142,8 @@ async def send_entry(target: Message, user_id: int, state: FSMContext | None = N
     await target.answer(
         '<b>━━━━━━━━━━━━━━━━━━\nПОСЛЕДНИЙ ХРАНИТЕЛЬ\n━━━━━━━━━━━━━━━━━━</b>\n\n'
         'Архив памяти повреждён. Из него исчезают слова, открытия и человеческие истории России.\n\n'
-        'У вас есть несколько минут, чтобы вернуть один фрагмент и увидеть, как даже небольшой выбор меняет будущее Архива.\n\n'
-        '<i>Здесь не проверяют, сколько вы помните. Здесь важно, что вы решите сохранить.</i>',
+        'За несколько минут вы восстановите пять фрагментов. Один из них откроется только через подсказку в живой презентации.\n\n'
+        '<i>Здесь важно не только знать, но и решить, что передать дальше.</i>',
         reply_markup=game.inline_buttons(buttons),
     )
 
@@ -178,10 +168,11 @@ async def begin_registration(callback: CallbackQuery, state: FSMContext) -> None
 
 
 @router.callback_query(F.data == 'show:demo')
-async def demo_start(callback: CallbackQuery) -> None:
+async def demo_start(callback: CallbackQuery, state: FSMContext) -> None:
     if await game.db.setting('demo_enabled', '1') != '1':
         await callback.answer('Демонстрация временно отключена.', show_alert=True)
         return
+    await state.clear()
     await init_presentation_demo()
     await quote_for(callback.from_user.id)
     await game.db.execute(
@@ -190,14 +181,14 @@ async def demo_start(callback: CallbackQuery) -> None:
     )
     await callback.answer()
     msg = await callback.message.answer('<b>Сканируем повреждённые сектора…</b>\n\n▰▱▱▱▱ 18%')
-    await asyncio.sleep(0.6)
+    await asyncio.sleep(0.55)
     await msg.edit_text('<b>Сопоставляем слова, имена и открытия…</b>\n\n▰▰▰▱▱ 57%')
-    await asyncio.sleep(0.6)
+    await asyncio.sleep(0.55)
     await msg.edit_text('<b>Контур памяти найден</b>\n\n▰▰▰▰▰ 100%')
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.45)
     await msg.edit_text(
         '<b>ВЫ НАЗНАЧЕНЫ ПОСЛЕДНИМ ХРАНИТЕЛЕМ</b>\n\n'
-        'Архив откроет пять коротких испытаний. Одно потребует не только телефона, но и живой подсказки со сцены.',
+        'Пять испытаний проверят культурную память, умение отличать факт от шума и готовность отвечать за сделанный выбор.',
         reply_markup=game.inline_buttons([('Начать восстановление', 'show:first')]),
     )
 
@@ -206,8 +197,8 @@ async def demo_start(callback: CallbackQuery) -> None:
 async def demo_first(callback: CallbackQuery) -> None:
     await callback.answer()
     await callback.message.answer(
-        '<b>1/5 · ЧТО СОХРАНИТЬ ПЕРВЫМ?</b>\n\n'
-        'Архив успевает вывести только один фрагмент. Выберите не правильный ответ, а то, без чего Россия будущего потеряет важную часть себя.',
+        '<b>1/5 · ЦЕНА ВЫБОРА</b>\n\n'
+        'Архив успевает вывести только один фрагмент. Что вы сохраните первым?',
         reply_markup=game.inline_buttons([(item.title, f'show:first:{item.code}') for item in FIRST_CHOICES]),
     )
 
@@ -219,45 +210,41 @@ async def demo_first_choice(callback: CallbackQuery) -> None:
     if not choice:
         return
     await game.db.execute(
-        "UPDATE presentation_demo_sessions SET first_choice=?, stage='emoji' WHERE user_id=?",
+        "UPDATE presentation_demo_sessions SET first_choice=?, stage='space' WHERE user_id=?",
         (code, callback.from_user.id),
     )
     await callback.answer()
     await callback.message.answer(
         f'<b>ВЫБОР СОХРАНЁН</b>\n\n{choice.consequence}\n\n'
         f'Проявившаяся линия: <b>{choice.value}</b>\n\n'
-        '<i>Архив не оценивает ваш выбор. Он запоминает его.</i>'
+        '<i>Архив не оценивает выбор. Он запоминает его.</i>'
     )
-    await asyncio.sleep(0.4)
     await callback.message.answer(
-        '<b>2/5 · КУЛЬТУРНЫЙ ШИФР</b>\n\n'
-        '🌊 🌳 🟢 ⛓️ 🐈 📖 🌙\n\n'
-        'Какой известный фрагмент русской литературы здесь зашифрован?',
+        '<b>2/5 · КОСМИЧЕСКИЙ ШИФР</b>\n\n'
+        '🚀 🌍 1️⃣ 👨‍🚀 1️⃣0️⃣8️⃣ ⏱️\n\n'
+        'Какое событие зашифровано?',
         reply_markup=game.inline_buttons([
-            ('«У лукоморья дуб зелёный…»', 'show:emoji:correct'),
-            ('«Мороз и солнце; день чудесный…»', 'show:emoji:wrong'),
-            ('«Белеет парус одинокий…»', 'show:emoji:wrong'),
+            ('Первый полёт человека в космос', 'show:space:correct'),
+            ('Первая высадка на Луну', 'show:space:wrong'),
+            ('Запуск первого спутника', 'show:space:wrong'),
         ]),
     )
 
 
-@router.callback_query(F.data == 'show:emoji:wrong')
-async def emoji_wrong(callback: CallbackQuery) -> None:
-    await callback.answer('Посмотрите на море, дуб, цепь и кота.', show_alert=True)
+@router.callback_query(F.data == 'show:space:wrong')
+async def space_wrong(callback: CallbackQuery) -> None:
+    await callback.answer('Обратите внимание: человек, первый полёт и 108 минут.', show_alert=True)
 
 
-@router.callback_query(F.data == 'show:emoji:correct')
-async def emoji_correct(callback: CallbackQuery) -> None:
-    row = await game.db.one('SELECT first_choice FROM presentation_demo_sessions WHERE user_id=?', (callback.from_user.id,))
-    if not row:
-        return
+@router.callback_query(F.data == 'show:space:correct')
+async def space_correct(callback: CallbackQuery) -> None:
     await game.db.execute("UPDATE presentation_demo_sessions SET stage='source' WHERE user_id=?", (callback.from_user.id,))
-    await callback.answer('Фрагмент распознан', show_alert=True)
+    await callback.answer('Фрагмент восстановлен', show_alert=True)
     await callback.message.answer(
-        '<b>ФРАГМЕНТ ВОССТАНОВЛЕН</b>\n\n'
-        'Эта строка открывает пролог к поэме Александра Пушкина «Руслан и Людмила». '
-        'Она стала одним из самых узнаваемых образов русской литературы: в нескольких словах соединены природа, сказка, устная традиция и музыкальность русского языка.\n\n'
-        '<i>Память живёт не только в датах. Иногда она начинается с одной строки, которую узнают поколения.</i>',
+        '<b>КОСМИЧЕСКИЙ ФРАГМЕНТ ВОССТАНОВЛЕН</b>\n\n'
+        '12 апреля 1961 года Юрий Гагарин на корабле «Восток-1» совершил первый в истории орбитальный полёт человека. Он продолжался 108 минут.\n\n'
+        'Это был результат труда огромной научной и инженерной школы и событие, после которого космос стал частью общего будущего человечества.\n\n'
+        '<i>Россия вошла в мировую историю не только как страна мечты о космосе, но и как страна, которая первой превратила эту мечту в реальность.</i>',
         reply_markup=game.inline_buttons([('Продолжить', 'show:source')]),
     )
 
@@ -267,63 +254,62 @@ async def source_task(callback: CallbackQuery) -> None:
     await callback.answer()
     await callback.message.answer(
         '<b>3/5 · ПРОВЕРКА ИСТОЧНИКА</b>\n\n'
-        'Архив нашёл три сообщения о первом полёте человека в космос. Какое можно считать надёжной основой исторической памяти?',
+        'Архив нашёл три сообщения об историческом событии. Какое можно использовать как основу памяти?',
         reply_markup=game.inline_buttons([
             ('Пост без автора', 'show:source:wrong'),
-            ('Яркий ролик без ссылок', 'show:source:wrong'),
-            ('Документ с датой и автором', 'show:source:correct'),
+            ('Ролик без ссылок', 'show:source:wrong'),
+            ('Документ с автором и датой', 'show:source:correct'),
         ]),
     )
 
 
 @router.callback_query(F.data == 'show:source:wrong')
 async def source_wrong(callback: CallbackQuery) -> None:
-    await callback.answer('Эффектная подача ещё не делает источник проверенным.', show_alert=True)
+    await callback.answer('Яркая подача ещё не делает источник надёжным.', show_alert=True)
 
 
 @router.callback_query(F.data == 'show:source:correct')
-async def source_correct(callback: CallbackQuery) -> None:
+async def source_correct(callback: CallbackQuery, state: FSMContext) -> None:
     await game.db.execute("UPDATE presentation_demo_sessions SET stage='awaiting_key' WHERE user_id=?", (callback.from_user.id,))
+    await state.set_state(DemoFlow.live_key)
     await callback.answer('Источник подтверждён', show_alert=True)
     await callback.message.answer(
         '<b>ИСТОЧНИК ПОДТВЕРЖДЁН</b>\n\n'
-        '12 апреля 1961 года Юрий Гагарин совершил первый в истории человечества орбитальный космический полёт на корабле «Восток-1». '
-        'Полёт продолжался 108 минут и стал событием мирового масштаба.\n\n'
-        'Его значение не только в рекорде. Советская наука, инженерная школа и мужество человека доказали: граница возможного может быть передвинута.\n\n'
-        '<i>Архив сохраняет не легенду вместо факта, а факт, который сам стал легендой.</i>\n\n'
-        '<b>Теперь нужен живой ключ.</b> Найдите на слайде пропущенное слово и отправьте его сообщением:\n\n'
-        '<b>«У лукоморья дуб …»</b>'
+        'Историческая память начинается с проверяемого источника: автора, даты, контекста и места хранения. Именно это отличает знание от убедительной выдумки.\n\n'
+        '<b>4/5 · ЖИВОЙ ШИФР</b>\n\n'
+        'Следующий ключ находится на слайде презентации. Введите пропущенное слово:\n\n'
+        '<b>«У лукоморья дуб …»</b>\n\n'
+        '<i>Это единственное испытание, где ответ нужно вписать вручную.</i>'
     )
 
 
-@router.message(F.text)
-async def presentation_text_answer(message: Message) -> None:
-    await init_presentation_demo()
+@router.message(DemoFlow.live_key)
+async def presentation_text_answer(message: Message, state: FSMContext) -> None:
+    answer = (message.text or '').strip().lower().replace('ё', 'е').strip(' .,!?:;"«»')
     row = await game.db.one(
-        'SELECT first_choice, stage, attempts FROM presentation_demo_sessions WHERE user_id=?',
+        'SELECT first_choice, attempts FROM presentation_demo_sessions WHERE user_id=?',
         (message.from_user.id,),
     )
-    if not row or row['stage'] != 'awaiting_key':
+    if not row:
+        await state.clear()
         return
-    answer = message.text.strip().lower().replace('ё', 'е').strip(' .,!?:;"«»')
     if answer != 'зеленый':
         attempts = int(row['attempts']) + 1
-        await game.db.execute(
-            'UPDATE presentation_demo_sessions SET attempts=? WHERE user_id=?',
-            (attempts, message.from_user.id),
-        )
-        hint = 'Ключ обозначает цвет.' if attempts == 1 else 'Посмотрите на слайд: «У лукоморья дуб …»'
+        await game.db.execute('UPDATE presentation_demo_sessions SET attempts=? WHERE user_id=?', (attempts, message.from_user.id))
+        hint = 'Подсказка: это цвет дуба.' if attempts == 1 else 'Посмотрите на слайд: «У лукоморья дуб …»'
         await message.answer(f'<b>КЛЮЧ НЕ ПОДОШЁЛ</b>\n\n{hint}\n\nПопробуйте ещё раз.')
         return
+    await state.clear()
     first_code = row['first_choice']
     await game.db.execute("UPDATE presentation_demo_sessions SET stage='choice2' WHERE user_id=?", (message.from_user.id,))
-    msg = await message.answer('<b>4/5 · ЖИВОЙ КЛЮЧ ПРИНЯТ</b>\n\n▰▱▱▱▱ 21%\nСверяем ответ со слайда…')
-    await asyncio.sleep(0.6)
+    msg = await message.answer('<b>ЖИВОЙ КЛЮЧ ПРИНЯТ</b>\n\n▰▱▱▱▱ 21%\nСверяем ответ со слайдом…')
+    await asyncio.sleep(0.55)
     await msg.edit_text('<b>ЖИВОЙ КЛЮЧ ПРИНЯТ</b>\n\n▰▰▰▱▱ 64%\nСоединяем сцену и цифровой маршрут…')
-    await asyncio.sleep(0.6)
+    await asyncio.sleep(0.55)
     await msg.edit_text(
         '<b>ОФЛАЙН-ФРАГМЕНТ ОТКРЫЛ ЦИФРОВУЮ ВЕТВЬ</b>\n\n'
-        'Так работает весь проект: команда выполняет действие в живом пространстве, получает ключ и только после этого продолжает путь в Telegram-боте.\n\n'
+        'Строка открывает пролог к поэме Александра Пушкина «Руслан и Людмила» и стала одним из самых узнаваемых образов русской литературы.\n\n'
+        'Так работает проект: действие в живом пространстве открывает продолжение в Telegram-боте.\n\n'
         '<b>Ваш первый выбор уже изменил последнее испытание.</b>',
         reply_markup=game.inline_buttons([('Открыть изменённую ветвь', f'show:second:{first_code}')]),
     )
@@ -340,9 +326,7 @@ async def demo_second(callback: CallbackQuery) -> None:
     await callback.message.answer(
         '<b>5/5 · ЭХО ВАШЕГО ВЫБОРА</b>\n\n'
         f'{prompt}\n\n<i>Этот вопрос появился именно из вашего первого решения.</i>',
-        reply_markup=game.inline_buttons([
-            (item.title, f'show:finish:{first_code}:{item.code}') for item in options
-        ]),
+        reply_markup=game.inline_buttons([(item.title, f'show:finish:{first_code}:{item.code}') for item in options]),
     )
 
 
@@ -366,25 +350,20 @@ async def demo_finish(callback: CallbackQuery) -> None:
     )
     await callback.answer()
     msg = await callback.message.answer('<b>Архив сопоставляет решения…</b>\n\n▰▰▱▱▱ 39%')
-    await asyncio.sleep(0.7)
+    await asyncio.sleep(0.65)
     await msg.edit_text('<b>Формируем личную легенду…</b>\n\n▰▰▰▰▱ 82%')
-    await asyncio.sleep(0.7)
+    await asyncio.sleep(0.65)
     await msg.edit_text(
         '<b>━━━━━━━━━━━━━━━━━━\nЛЕГЕНДА ПОСЛЕДНЕГО ХРАНИТЕЛЯ\n━━━━━━━━━━━━━━━━━━</b>\n\n'
         f'<b>{title}</b>\n\n{legend}\n{second.consequence}\n\n'
-        '<b>Что вы успели восстановить</b>\n'
-        '• литературный образ Пушкина;\n'
-        '• проверенный факт о полёте Гагарина;\n'
-        '• связь живого пространства и цифрового маршрута;\n'
-        '• собственный принцип сохранения памяти.\n\n'
-        '<b>Это только демонстрационная ветвь.</b>\n'
-        'В полном маршруте 10 решений формируют до <b>59 049</b> индивидуальных сценариев.\n\n'
+        '<b>Вы восстановили</b>\n'
+        '• факт о первом полёте человека в космос;\n'
+        '• принцип проверки исторического источника;\n'
+        '• строку, объединяющую поколения читателей;\n'
+        '• собственный способ сохранять память.\n\n'
+        '<b>Это демонстрационная ветвь.</b> В полном маршруте 10 решений создают до <b>59 049</b> индивидуальных сценариев.\n\n'
         f'<b>Ваша цитата Архива №{quote_number}</b>\n<i>«{quote}»</i>\n\n'
-        '<b>Последний Хранитель — не тот, кто знает всё.</b>\n'
-        'Это тот, кто понимает ценность наследия России и принимает решение передать его дальше.\n\n'
+        '<b>Последний Хранитель — не тот, кто знает всё.</b> Это тот, кто понимает ценность наследия России и передаёт его дальше.\n\n'
         '<b>Архив закрывается. Память — нет.</b>',
-        reply_markup=game.inline_buttons([
-            ('📝 Регистрация', 'show:register'),
-            ('↻ Пройти ещё раз', 'show:demo'),
-        ]),
+        reply_markup=game.inline_buttons([('📝 Регистрация', 'show:register'), ('↻ Пройти ещё раз', 'show:demo')]),
     )
