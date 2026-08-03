@@ -17,6 +17,41 @@ async def _reset_user(user_id: int) -> None:
     )
 
 
+async def _panel(target: Message) -> None:
+    mode = await game.db.setting('showcase_mode', 'mixed')
+    demo = await game.db.setting('demo_enabled', '1')
+    await target.answer(
+        '<b>🎬 ПРЕЗЕНТАЦИОННЫЙ РЕЖИМ</b>\n\n'
+        f'Режим: <b>{mode}</b>\n'
+        f'Демо: <b>{"включено" if demo == "1" else "выключено"}</b>\n\n'
+        '<i>Все изменения применяются сразу.</i>',
+        reply_markup=game.inline_buttons([
+            ('🎤 Только демо', 'show:mode:presentation'),
+            ('✨ Демо + регистрация', 'show:mode:mixed'),
+            ('🚀 Мероприятие', 'show:mode:event'),
+            ('🔒 Закрыть', 'show:mode:closed'),
+            ('Вкл./выкл. демо', 'show:toggle-demo'),
+            ('↻ Моё демо', 'show:restart-self'),
+            ('♻️ Сбросить всем', 'show:restart-all'),
+            ('🖼 Проверить визуалы', 'show:visual-preview'),
+        ], columns=2),
+    )
+
+
+@router.message(Command('showmode'))
+async def showmode(message: Message) -> None:
+    if await game.is_admin(message.from_user.id):
+        await _panel(message)
+
+
+@router.callback_query(F.data == 'show:admin')
+async def showmode_callback(callback: CallbackQuery) -> None:
+    if not await game.is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await _panel(callback.message)
+
+
 @router.message(Command('demorestart'))
 async def restart_demo_command(message: Message) -> None:
     if not await game.is_admin(message.from_user.id):
