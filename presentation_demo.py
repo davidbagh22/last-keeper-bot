@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -15,47 +15,39 @@ router = Router(name='last_keeper_presentation_demo')
 
 
 @dataclass(frozen=True)
-class DemoChoice:
+class Choice:
     code: str
     title: str
-    consequence: str
     value: str
+    consequence: str
 
 
-FIRST_CHOICES = (
-    DemoChoice('word', 'Сохранить русский язык', 'Слова остались живыми — и снова связали поколения.', 'Живое слово'),
-    DemoChoice('discovery', 'Сохранить великое открытие', 'Будущее получило опору для следующего шага.', 'Будущее'),
-    DemoChoice('culture', 'Сохранить культурный образ', 'Россия осталась узнаваемой через символы, музыку и искусство.', 'Культурный код'),
-)
-
-SECOND_BRANCHES = {
-    'word': ('Архив запомнил: вы выбрали живое слово. Теперь решите, как передать его дальше.', (
-        DemoChoice('original', 'Оставить только оригинал', 'Подлинность сохранена, но путь к ней стал сложнее.', 'Память'),
-        DemoChoice('living', 'Дать современное объяснение', 'Смысл стал доступнее молодым читателям.', 'Живое слово'),
-        DemoChoice('bridge', 'Показать обе версии рядом', 'Прошлое и настоящее вступили в диалог.', 'Связь поколений'),
-    )),
-    'discovery': ('Архив запомнил: вы выбрали открытие. Теперь решите, что важнее сохранить вместе с ним.', (
-        DemoChoice('fact', 'Точные факты', 'История сохранила надёжные координаты.', 'Точность'),
-        DemoChoice('person', 'Историю человека', 'Достижение получило лицо и голос.', 'Человеческий голос'),
-        DemoChoice('future', 'Вопрос к будущему', 'Память превратилась в приглашение продолжать путь.', 'Будущее'),
-    )),
-    'culture': ('Архив запомнил: вы выбрали культурный образ. Теперь решите, как он должен жить дальше.', (
-        DemoChoice('protect', 'Бережно сохранить форму', 'Образ остался узнаваемым и подлинным.', 'Память'),
-        DemoChoice('rethink', 'Переосмыслить для молодёжи', 'Культурный код получил новую форму.', 'Смелость'),
-        DemoChoice('create', 'Создать новый проект на его основе', 'Наследие стало действием, а не экспонатом.', 'Культурный код'),
-    )),
+VALUES = {
+    'memory': 'Память',
+    'voice': 'Живое слово',
+    'future': 'Будущее',
+    'truth': 'Точность',
+    'human': 'Человеческий голос',
 }
 
+TASK1 = (
+    Choice('memory', 'Сохранить подлинную форму', 'memory', 'Архив сохранил глубину оригинала.'),
+    Choice('voice', 'Сделать понятным молодёжи', 'voice', 'Наследие снова заговорило современным языком.'),
+    Choice('future', 'Создать новую форму на основе оригинала', 'future', 'Память превратилась в импульс к созиданию.'),
+)
+
+TASK5 = (
+    Choice('truth', 'Сначала проверить каждый факт', 'truth', 'Архив стал точнее, но восстановление заняло больше времени.'),
+    Choice('human', 'Сначала вернуть имена и судьбы людей', 'human', 'История обрела человеческий голос.'),
+    Choice('future', 'Сначала открыть материалы молодому поколению', 'future', 'Архив начал жить дальше, а не остался закрытым хранилищем.'),
+)
+
 LEGENDS = {
-    ('word', 'original'): ('Страж подлинного слова', 'Вы сохраняете язык в его исторической глубине.'),
-    ('word', 'living'): ('Проводник живого слова', 'Вы помогаете наследию говорить с новым поколением.'),
-    ('word', 'bridge'): ('Создатель моста эпох', 'Вы соединяете оригинал и современное прочтение.'),
-    ('discovery', 'fact'): ('Архивариус точного пути', 'Вы сохраняете достижения России через проверенный факт.'),
-    ('discovery', 'person'): ('Хранитель имени', 'Для вас открытие невозможно отделить от человека.'),
-    ('discovery', 'future'): ('Архитектор будущего', 'Вы превращаете память о достижении в импульс к новому.'),
-    ('culture', 'protect'): ('Страж культурного кода', 'Вы бережёте форму, в которой Россия узнаёт себя.'),
-    ('culture', 'rethink'): ('Переводчик культурного кода', 'Вы открываете наследие современному зрителю.'),
-    ('culture', 'create'): ('Продолжатель традиции', 'Вы доказываете, что любовь к культуре проявляется в созидании.'),
+    'memory': ('Страж подлинной памяти', 'Вы сохраняете опору, без которой будущее теряет смысл.'),
+    'voice': ('Проводник живого слова', 'Вы умеете делать наследие понятным, не превращая его в пустой знак.'),
+    'future': ('Архитектор будущего', 'Вы превращаете память о России в действие и новый замысел.'),
+    'truth': ('Архивариус точного пути', 'Вы не позволяете эффектной версии вытеснить проверенный факт.'),
+    'human': ('Хранитель человеческих историй', 'Для вас история России начинается с имени, голоса и судьбы человека.'),
 }
 
 QUOTE_OPENINGS = (
@@ -68,15 +60,21 @@ QUOTE_ENDINGS = (
     'когда достижения прошлого вдохновляют на новые открытия.', 'когда за великими событиями мы видим судьбы людей.',
     'когда молодое поколение открывает её культуру по-своему.', 'когда память становится не обязанностью, а личным выбором.',
     'когда традиция не замирает, а продолжает развиваться.', 'когда мы сохраняем правду, смысл и человеческий голос.',
-    'когда прошлое помогает нам ответственнее строить будущее.', 'когда каждый становится хранителем хотя бы одной истории.',
+    'когда прошлое помогает ответственнее строить будущее.', 'когда каждый становится хранителем хотя бы одной истории.',
 )
 
 
 async def init_presentation_demo() -> None:
     await game.db.execute('''CREATE TABLE IF NOT EXISTS presentation_demo_sessions(
-        user_id INTEGER PRIMARY KEY, first_choice TEXT NOT NULL DEFAULT '', second_choice TEXT NOT NULL DEFAULT '',
-        quote_index INTEGER NOT NULL UNIQUE, stage TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
-        started_at TEXT NOT NULL, completed_at TEXT)''')
+        user_id INTEGER PRIMARY KEY,
+        first_choice TEXT NOT NULL DEFAULT '',
+        second_choice TEXT NOT NULL DEFAULT '',
+        quote_index INTEGER NOT NULL UNIQUE,
+        stage TEXT NOT NULL DEFAULT '',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL,
+        completed_at TEXT
+    )''')
     for key, value in (('showcase_mode', 'mixed'), ('demo_enabled', '1')):
         if not await game.db.setting(key, ''):
             await game.db.set_setting(key, value)
@@ -87,13 +85,16 @@ async def showcase_mode() -> str:
 
 
 async def quote_for(user_id: int) -> tuple[int, str]:
-    row = await game.db.one('SELECT quote_index FROM presentation_demo_sessions WHERE user_id = ?', (user_id,))
+    row = await game.db.one('SELECT quote_index FROM presentation_demo_sessions WHERE user_id=?', (user_id,))
     if row:
         index = int(row['quote_index'])
     else:
         used = {int(item['quote_index']) for item in await game.db.all('SELECT quote_index FROM presentation_demo_sessions')}
         index = next((number for number in range(100) if number not in used), user_id % 100)
-        await game.db.execute('INSERT OR IGNORE INTO presentation_demo_sessions(user_id, quote_index, started_at) VALUES(?, ?, ?)', (user_id, index, utcnow()))
+        await game.db.execute(
+            'INSERT OR IGNORE INTO presentation_demo_sessions(user_id, quote_index, started_at) VALUES(?, ?, ?)',
+            (user_id, index, utcnow()),
+        )
     return index + 1, f'{QUOTE_OPENINGS[index // 10]} {QUOTE_ENDINGS[index % 10]}'
 
 
@@ -118,145 +119,230 @@ async def send_entry(target: Message, user_id: int, state: FSMContext | None = N
         buttons.append(('🎛 Режим показа', 'show:admin'))
     await target.answer(
         '<b>━━━━━━━━━━━━━━━━━━\nАРХИВ ПАМЯТИ\n━━━━━━━━━━━━━━━━━━</b>\n\n'
-        'Зафиксировано исчезновение слов, открытий и культурных образов России.\n\n'
-        '<b>До необратимых изменений: 03:00</b>\n\nАрхив ищет человека, готового не наблюдать, а вмешаться.',
+        'Повреждены пять фрагментов: слово, открытие, источник, живая память и связь поколений.\n\n'
+        '<b>На восстановление — около 3 минут.</b>\n\n'
+        'Каждое действие меняет итоговую легенду Хранителя.',
         reply_markup=game.inline_buttons(buttons),
     )
 
 
 @router.message(CommandStart())
 async def presentation_start(message: Message, state: FSMContext) -> None:
-    await init_presentation_demo(); await send_entry(message, message.from_user.id, state)
+    await init_presentation_demo()
+    await send_entry(message, message.from_user.id, state)
 
 
 @router.callback_query(F.data == 'show:register')
 async def begin_registration(callback: CallbackQuery, state: FSMContext) -> None:
     if await showcase_mode() not in {'mixed', 'event'}:
-        await callback.answer('Регистрация сейчас отключена.', show_alert=True); return
-    await callback.answer(); await state.set_state(game.Registration.consent)
-    await callback.message.answer('<b>КНИГА ХРАНИТЕЛЕЙ</b>\n\nДля участия Архиву потребуются имя, возраст и Telegram ID.', reply_markup=game.inline_buttons([('Продолжить регистрацию', 'reg:yes')]))
+        await callback.answer('Регистрация сейчас отключена.', show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(game.Registration.consent)
+    await callback.message.answer(
+        '<b>КНИГА ХРАНИТЕЛЕЙ</b>\n\nДля участия Архиву потребуются имя, возраст и Telegram ID.',
+        reply_markup=game.inline_buttons([('Продолжить регистрацию', 'reg:yes')]),
+    )
 
 
 @router.callback_query(F.data == 'show:demo')
 async def demo_start(callback: CallbackQuery) -> None:
     if await game.db.setting('demo_enabled', '1') != '1':
-        await callback.answer('Демонстрация временно отключена.', show_alert=True); return
-    await init_presentation_demo(); await quote_for(callback.from_user.id)
-    await game.db.execute("UPDATE presentation_demo_sessions SET first_choice='', second_choice='', stage='choice1', attempts=0, completed_at=NULL WHERE user_id=?", (callback.from_user.id,))
+        await callback.answer('Демонстрация временно отключена.', show_alert=True)
+        return
+    await init_presentation_demo()
+    await quote_for(callback.from_user.id)
+    await game.db.execute(
+        "UPDATE presentation_demo_sessions SET first_choice='', second_choice='', stage='task1', attempts=0, completed_at=NULL WHERE user_id=?",
+        (callback.from_user.id,),
+    )
     await callback.answer()
-    msg = await callback.message.answer('<b>Сканирование Архива…</b>\n\n▰▱▱▱▱ 16%')
-    await asyncio.sleep(0.7); await msg.edit_text('<b>Восстанавливаем связь времён…</b>\n\n▰▰▰▱▱ 58%')
-    await asyncio.sleep(0.7); await msg.edit_text('<b>Проверяем контур памяти…</b>\n\n▰▰▰▰▰ 100%')
-    await asyncio.sleep(0.6); await msg.edit_text('<b>ХРАНИТЕЛЬ НАЙДЕН</b>\n\nАрхив даст вам несколько минут.\nКаждое решение изменит то, что откроется дальше.', reply_markup=game.inline_buttons([('Начать реконструкцию', 'show:first')]))
+    msg = await callback.message.answer('<b>Подключение к Архиву…</b>\n\n▰▱▱▱▱ 18%')
+    await asyncio.sleep(0.55)
+    await msg.edit_text('<b>Сопоставляем культурные фрагменты…</b>\n\n▰▰▰▱▱ 57%')
+    await asyncio.sleep(0.55)
+    await msg.edit_text('<b>Хранитель найден.</b>\n\n▰▰▰▰▰ 100%', reply_markup=game.inline_buttons([('Начать 5 испытаний', 'show:t1')]))
 
 
-@router.callback_query(F.data == 'show:first')
-async def demo_first(callback: CallbackQuery) -> None:
+@router.callback_query(F.data == 'show:t1')
+async def task1(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer('<b>ФРАГМЕНТ №1 · ЦЕНА ВЫБОРА</b>\n\nИз повреждённого сектора можно вывести только один фрагмент. Остальные временно исчезнут из маршрута.\n\n<i>Здесь нет правильного ответа. Есть только последствия.</i>', reply_markup=game.inline_buttons([(item.title, f'show:first:{item.code}') for item in FIRST_CHOICES]))
+    await callback.message.answer(
+        '<b>1/5 · ЦЕНА СОХРАНЕНИЯ</b>\n\n'
+        'Старинный текст дошёл до будущего, но его почти перестали понимать. Что вы сохраните в первую очередь?\n\n'
+        '<i>Правильного ответа нет: выбор формирует вашу легенду.</i>',
+        reply_markup=game.inline_buttons([(item.title, f'show:t1:{item.code}') for item in TASK1]),
+    )
 
 
-@router.callback_query(F.data.startswith('show:first:'))
-async def demo_first_choice(callback: CallbackQuery) -> None:
+@router.callback_query(F.data.startswith('show:t1:'))
+async def task1_answer(callback: CallbackQuery) -> None:
     code = callback.data.rsplit(':', 1)[1]
-    choice = next((item for item in FIRST_CHOICES if item.code == code), None)
-    if not choice: return
-    await game.db.execute("UPDATE presentation_demo_sessions SET first_choice=?, stage='emoji' WHERE user_id=?", (code, callback.from_user.id))
+    item = next((x for x in TASK1 if x.code == code), None)
+    if not item:
+        return
+    await game.db.execute("UPDATE presentation_demo_sessions SET first_choice=?, stage='task2' WHERE user_id=?", (code, callback.from_user.id))
     await callback.answer()
-    await callback.message.answer(f'<b>ВЫБОР СОХРАНЁН</b>\n\n{choice.consequence}\n\nПроявившаяся линия: <b>{choice.value}</b>\n\nНо Архив не откроет следующую ветвь без проверки культурной памяти.')
-    await asyncio.sleep(0.5)
-    await callback.message.answer('<b>ЭМОДЗИ-ШИФР</b>\n\n🌊 🌳 🟢 ⛓️ 🐈 📖 🌙\n\nКакой известный фрагмент русской литературы здесь зашифрован?', reply_markup=game.inline_buttons([
-        ('«У лукоморья дуб зелёный…»', 'show:emoji:correct'),
-        ('«Мороз и солнце; день чудесный…»', 'show:emoji:wrong'),
-        ('«Белеет парус одинокий…»', 'show:emoji:wrong'),
-    ]))
+    await callback.message.answer(
+        f'<b>ВЕТВЬ СОХРАНЕНА</b>\n\n{item.consequence}\n\nЛиния: <b>{VALUES[item.value]}</b>',
+        reply_markup=game.inline_buttons([('Перейти к шифру', 'show:t2')]),
+    )
 
 
-@router.callback_query(F.data == 'show:emoji:wrong')
-async def emoji_wrong(callback: CallbackQuery) -> None:
-    await callback.answer('Архив не распознал фрагмент. Посмотрите на море, дуб, цепь и кота.', show_alert=True)
+@router.callback_query(F.data == 'show:t2')
+async def task2(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        '<b>2/5 · ЭМОДЗИ-ШИФР</b>\n\n🚀 🌍 1️⃣ 👨‍🚀 🇷🇺\n\n'
+        'Какое событие российской истории зашифровано?',
+        reply_markup=game.inline_buttons([
+            ('Первый полёт человека в космос', 'show:t2:ok'),
+            ('Создание первой подводной лодки', 'show:t2:no'),
+            ('Первая экспедиция к Северному полюсу', 'show:t2:no'),
+        ]),
+    )
 
 
-@router.callback_query(F.data == 'show:emoji:correct')
-async def emoji_correct(callback: CallbackQuery) -> None:
-    row = await game.db.one('SELECT first_choice FROM presentation_demo_sessions WHERE user_id=?', (callback.from_user.id,))
-    if not row: return
-    await game.db.execute("UPDATE presentation_demo_sessions SET stage='awaiting_key' WHERE user_id=?", (callback.from_user.id,))
-    await callback.answer('Фрагмент распознан', show_alert=True)
-    await callback.message.answer('<b>ФРАГМЕНТ РАСПОЗНАН</b>\n\nВы узнали строку Пушкина. Но цифрового знания недостаточно.\n\nСледующий ключ находится <b>в живой презентации</b>. Найдите на слайде пропущенное слово и отправьте его сообщением:\n\n<b>«У лукоморья дуб …»</b>\n\n<i>Без офлайн-подсказки цифровой маршрут не продолжится.</i>')
+@router.callback_query(F.data == 'show:t2:no')
+async def task2_wrong(callback: CallbackQuery) -> None:
+    await callback.answer('Подсказка: Земля, единица и космонавт.', show_alert=True)
+
+
+@router.callback_query(F.data == 'show:t2:ok')
+async def task2_ok(callback: CallbackQuery) -> None:
+    await game.db.execute("UPDATE presentation_demo_sessions SET stage='task3' WHERE user_id=?", (callback.from_user.id,))
+    await callback.answer('Фрагмент восстановлен', show_alert=True)
+    await callback.message.answer(
+        '<b>ГАГАРИН. ПЕРВЫЙ ШАГ</b>\n\n'
+        'Архив вернул событие, которое показало миру масштаб научной мысли и человеческой смелости России.',
+        reply_markup=game.inline_buttons([('Проверить источник', 'show:t3')]),
+    )
+
+
+@router.callback_query(F.data == 'show:t3')
+async def task3(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        '<b>3/5 · ПРОВЕРКА ИСТОЧНИКА</b>\n\n'
+        'В Архив попали три карточки. Какая выглядит наиболее надёжной?\n\n'
+        '① «Так говорят в сети»\n'
+        '② Документ с автором, датой и местом хранения\n'
+        '③ Яркий ролик без указания источника',
+        reply_markup=game.inline_buttons([
+            ('①', 'show:t3:no'), ('②', 'show:t3:ok'), ('③', 'show:t3:no')
+        ], columns=3),
+    )
+
+
+@router.callback_query(F.data == 'show:t3:no')
+async def task3_wrong(callback: CallbackQuery) -> None:
+    await callback.answer('Архив просит проверить происхождение информации.', show_alert=True)
+
+
+@router.callback_query(F.data == 'show:t3:ok')
+async def task3_ok(callback: CallbackQuery) -> None:
+    await game.db.execute("UPDATE presentation_demo_sessions SET stage='live_key' WHERE user_id=?", (callback.from_user.id,))
+    await callback.answer('Источник подтверждён', show_alert=True)
+    await callback.message.answer(
+        '<b>ИСТОЧНИК ПРИНЯТ</b>\n\n'
+        'Но следующий сектор нельзя открыть только телефоном. Ключ находится в живой презентации.\n\n'
+        '<b>Посмотрите на слайд и введите показанное кодовое слово.</b>\n\n'
+        '<i>Во время защиты на слайде должно быть слово: ПАМЯТЬ</i>'
+    )
 
 
 @router.message(F.text)
-async def presentation_text_answer(message: Message) -> None:
+async def live_key_answer(message: Message) -> None:
     await init_presentation_demo()
-    row = await game.db.one('SELECT first_choice, stage, attempts FROM presentation_demo_sessions WHERE user_id=?', (message.from_user.id,))
-    if not row or row['stage'] != 'awaiting_key': return
+    row = await game.db.one('SELECT stage, attempts FROM presentation_demo_sessions WHERE user_id=?', (message.from_user.id,))
+    if not row or row['stage'] != 'live_key':
+        return
     answer = message.text.strip().lower().replace('ё', 'е').strip(' .,!?:;"«»')
-    if answer != 'зеленый':
+    if answer != 'память':
         attempts = int(row['attempts']) + 1
         await game.db.execute('UPDATE presentation_demo_sessions SET attempts=? WHERE user_id=?', (attempts, message.from_user.id))
-        hint = 'Подсказка: это цвет.' if attempts == 1 else 'Посмотрите на слайд: «У лукоморья дуб …»'
-        await message.answer(f'<b>КЛЮЧ НЕ ПОДОШЁЛ</b>\n\n{hint}\n\nПопробуйте ещё раз.'); return
-    first_code = row['first_choice']
-    await game.db.execute("UPDATE presentation_demo_sessions SET stage='choice2' WHERE user_id=?", (message.from_user.id,))
-    msg = await message.answer('<b>ЖИВОЙ КЛЮЧ ПРИНЯТ</b>\n\n▰▱▱▱▱ 18%\nСопоставляем ответ со слайда…')
-    await asyncio.sleep(0.7); await msg.edit_text('<b>ЖИВОЙ КЛЮЧ ПРИНЯТ</b>\n\n▰▰▰▱▱ 63%\nПерестраиваем следующую ветвь…')
-    await asyncio.sleep(0.7); await msg.edit_text('<b>ФРАГМЕНТ ВОССТАНОВЛЕН</b>\n\nЖивой формат открыл цифровой путь. Именно так офлайн-локации проекта соединяются с Telegram-ботом.\n\n<b>Следующая ситуация уже изменена вашим первым решением.</b>', reply_markup=game.inline_buttons([('Открыть изменённую ветвь', f'show:second:{first_code}')]))
+        await message.answer('<b>КЛЮЧ НЕ ПОДОШЁЛ</b>\n\nПосмотрите на выделенное слово на слайде презентации.')
+        return
+    await game.db.execute("UPDATE presentation_demo_sessions SET stage='task4' WHERE user_id=?", (message.from_user.id,))
+    await message.answer(
+        '<b>4/5 · ЖИВОЙ КЛЮЧ ПРИНЯТ</b>\n\n'
+        'Офлайн-действие открыло цифровую ветвь. Именно так пять живых локаций проекта связаны с Telegram-ботом.',
+        reply_markup=game.inline_buttons([('Открыть фрагмент памяти', 'show:t4')]),
+    )
 
 
-@router.callback_query(F.data.startswith('show:second:'))
-async def demo_second(callback: CallbackQuery) -> None:
-    first_code = callback.data.rsplit(':', 1)[1]; branch = SECOND_BRANCHES.get(first_code)
-    if not branch: return
-    prompt, options = branch; await callback.answer()
-    await callback.message.answer('<b>ФРАГМЕНТ №2 · ЭХО ВЫБОРА</b>\n\n' + prompt + '\n\n<i>Этот вопрос появился именно из вашего первого решения.</i>', reply_markup=game.inline_buttons([(item.title, f'show:finish:{first_code}:{item.code}') for item in options]))
+@router.callback_query(F.data == 'show:t4')
+async def task4(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        '<b>4/5 · ЛИЦА ПАМЯТИ</b>\n\n'
+        'Что важнее сохранить вместе с историческим событием?',
+        reply_markup=game.inline_buttons([
+            ('Только дату и итог', 'show:t4:fact'),
+            ('Личные письма и голоса людей', 'show:t4:human'),
+            ('Только официальный символ', 'show:t4:symbol'),
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith('show:t4:'))
+async def task4_answer(callback: CallbackQuery) -> None:
+    code = callback.data.rsplit(':', 1)[1]
+    mapping = {
+        'fact': ('truth', 'Архив сохранил точные координаты события.'),
+        'human': ('human', 'История обрела лицо, голос и личную судьбу.'),
+        'symbol': ('memory', 'Архив сохранил образ, который объединяет поколения.'),
+    }
+    if code not in mapping:
+        return
+    value, consequence = mapping[code]
+    await game.db.execute("UPDATE presentation_demo_sessions SET second_choice=?, stage='task5' WHERE user_id=?", (value, callback.from_user.id))
+    await callback.answer()
+    await callback.message.answer(
+        f'<b>СЛЕД СОХРАНЁН</b>\n\n{consequence}\n\nЛиния: <b>{VALUES[value]}</b>',
+        reply_markup=game.inline_buttons([('Принять финальное решение', 'show:t5')]),
+    )
+
+
+@router.callback_query(F.data == 'show:t5')
+async def task5(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        '<b>5/5 · КАКИМ СТАНЕТ АРХИВ?</b>\n\n'
+        'Восстановить всё сразу невозможно. Какой принцип станет главным?',
+        reply_markup=game.inline_buttons([(item.title, f'show:finish:{item.code}') for item in TASK5]),
+    )
 
 
 @router.callback_query(F.data.startswith('show:finish:'))
-async def demo_finish(callback: CallbackQuery) -> None:
-    parts = callback.data.split(':')
-    if len(parts) != 4: return
-    first_code, second_code = parts[2], parts[3]; branch = SECOND_BRANCHES.get(first_code)
-    if not branch: return
-    second = next((item for item in branch[1] if item.code == second_code), None)
-    if not second: return
-    title, legend = LEGENDS[(first_code, second_code)]; quote_number, quote = await quote_for(callback.from_user.id)
-    await game.db.execute("UPDATE presentation_demo_sessions SET second_choice=?, stage='done', completed_at=? WHERE user_id=?", (second_code, utcnow(), callback.from_user.id))
-    await callback.answer(); msg = await callback.message.answer('<b>Архив анализирует последствия…</b>\n\n▰▰▱▱▱ 41%')
-    await asyncio.sleep(0.8); await msg.edit_text('<b>Сопоставляем решения и ценности…</b>\n\n▰▰▰▰▱ 82%')
-    await asyncio.sleep(0.8); await msg.edit_text('<b>━━━━━━━━━━━━━━━━━━\nВАША ДЕМО-ЛЕГЕНДА\n━━━━━━━━━━━━━━━━━━</b>\n\n' + f'<b>{title}</b>\n\n{legend}\n{second.consequence}\n\n' + '<b>Вы сделали 2 выбора и уже изменили сюжет.</b>\nВ полном маршруте 10 решений создают до <b>59 049</b> индивидуальных сценариев.\n\n' + f'<b>Цитата Архива №{quote_number}</b>\n<i>«{quote}»</i>\n\nРоссия раскрывается здесь не как набор дат, а как живое наследие языка, культуры, науки и человеческих судеб.\n\n<b>Архив закрывается. Память — нет.</b>', reply_markup=game.inline_buttons([('📝 Регистрация', 'show:register'), ('↻ Пройти ещё раз', 'show:demo')]))
-
-
-@router.message(Command('showmode'))
-async def showmode_command(message: Message) -> None:
-    if await game.is_admin(message.from_user.id): await send_admin_modes(message)
-
-
-@router.callback_query(F.data == 'show:admin')
-async def show_admin(callback: CallbackQuery) -> None:
-    if not await game.is_admin(callback.from_user.id): return
-    await callback.answer(); await send_admin_modes(callback.message)
-
-
-async def send_admin_modes(target: Message) -> None:
-    mode = await showcase_mode(); demo = await game.db.setting('demo_enabled', '1')
-    await target.answer('<b>🎬 РЕЖИМ БОТА</b>\n\n' + f'Режим: <b>{mode}</b>\nДемо: <b>{"включено" if demo == "1" else "выключено"}</b>', reply_markup=game.inline_buttons([
-        ('🎤 Презентация', 'show:mode:presentation'), ('✨ Демо + регистрация', 'show:mode:mixed'),
-        ('🚀 Мероприятие', 'show:mode:event'), ('🔒 Закрыть', 'show:mode:closed'),
-        ('Вкл./выкл. демо', 'show:toggle-demo'), ('↻ Моё демо', 'show:restart-self'), ('♻️ Сбросить всем', 'show:restart-all'),
-    ], columns=2))
-
-
-@router.callback_query(F.data.startswith('show:mode:'))
-async def set_show_mode(callback: CallbackQuery) -> None:
-    if not await game.is_admin(callback.from_user.id): return
-    mode = callback.data.rsplit(':', 1)[1]
-    if mode not in {'presentation', 'mixed', 'event', 'closed'}: return
-    await game.db.set_setting('showcase_mode', mode); await callback.answer(f'Режим: {mode}', show_alert=True); await send_admin_modes(callback.message)
-
-
-@router.callback_query(F.data == 'show:toggle-demo')
-async def toggle_demo(callback: CallbackQuery) -> None:
-    if not await game.is_admin(callback.from_user.id): return
-    current = await game.db.setting('demo_enabled', '1'); value = '0' if current == '1' else '1'
-    await game.db.set_setting('demo_enabled', value); await callback.answer('Демо включено' if value == '1' else 'Демо выключено', show_alert=True); await send_admin_modes(callback.message)
+async def finish(callback: CallbackQuery) -> None:
+    code = callback.data.rsplit(':', 1)[1]
+    final_choice = next((x for x in TASK5 if x.code == code), None)
+    if not final_choice:
+        return
+    row = await game.db.one('SELECT first_choice, second_choice FROM presentation_demo_sessions WHERE user_id=?', (callback.from_user.id,))
+    if not row:
+        return
+    values = [row['first_choice'], row['second_choice'], final_choice.value]
+    dominant = max(set(values), key=values.count)
+    title, legend = LEGENDS.get(dominant, LEGENDS['memory'])
+    quote_number, quote = await quote_for(callback.from_user.id)
+    await game.db.execute(
+        "UPDATE presentation_demo_sessions SET stage='done', completed_at=? WHERE user_id=?",
+        (utcnow(), callback.from_user.id),
+    )
+    await callback.answer()
+    msg = await callback.message.answer('<b>Архив собирает последствия пяти решений…</b>\n\n▰▰▱▱▱ 36%')
+    await asyncio.sleep(0.6)
+    await msg.edit_text('<b>Сопоставляем знания, выборы и живой ключ…</b>\n\n▰▰▰▰▱ 78%')
+    await asyncio.sleep(0.6)
+    await msg.edit_text(
+        '<b>━━━━━━━━━━━━━━━━━━\nВАША ЛЕГЕНДА СОЗДАНА\n━━━━━━━━━━━━━━━━━━</b>\n\n'
+        f'<b>{title}</b>\n\n{legend}\n\n{final_choice.consequence}\n\n'
+        '<b>Вы прошли 5 разных механик:</b>\n'
+        '✓ ценностный выбор\n✓ эмодзи-шифр\n✓ проверка источника\n✓ живой ключ со слайда\n✓ итоговая дилемма\n\n'
+        'В полном маршруте 10 решений создают до <b>59 049</b> индивидуальных путей.\n\n'
+        f'<b>Ваша цитата Архива №{quote_number}</b>\n<i>«{quote}»</i>\n\n'
+        '<b>Архив закрывается. Память — нет.</b>',
+        reply_markup=game.inline_buttons([('↻ Пройти ещё раз', 'show:demo'), ('📝 Регистрация', 'show:register')]),
+    )
