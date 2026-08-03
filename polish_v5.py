@@ -53,15 +53,16 @@ async def send_compact_admin(target: Message, user_id: int) -> None:
     counts = Counter({row['team']: int(row['total']) for row in rows})
     teams_line = ' · '.join(f'{team}: {counts[team]}' for team in TEAM_COLORS)
     buttons = [
-        ('🎛 Команды', 'ac:home'), ('🎨 Распределить', 'tq:admin:queue'),
-        ('📊 Прогресс', 'tq:admin:teams'), ('💬 Вопросы', 'admin:support'),
-        ('📣 Рассылка', 'admin:broadcast'), ('📤 Экспорт', 'admin:export'),
-        ('🦋 Финал', 'admin:final'), ('🚨 Аварийно', 'v6:emergency'),
-        ('📈 Статистика', 'v6:stats'), ('⚙️ Ещё', 'tq:admin:legacy'),
+        ('🎬 Режим', 'show:admin'), ('🎛 Команды', 'ac:home'),
+        ('🎨 Распределить', 'tq:admin:queue'), ('📊 Прогресс', 'tq:admin:teams'),
+        ('💬 Вопросы', 'admin:support'), ('📣 Рассылка', 'admin:broadcast'),
+        ('📤 Экспорт', 'admin:export'), ('🦋 Финал', 'admin:final'),
+        ('🚨 Аварийно', 'v6:emergency'), ('📈 Статистика', 'v6:stats'),
+        ('⚙️ Ещё', 'tq:admin:legacy'),
     ]
     if game.is_superadmin(user_id):
-        buttons.insert(2, ('🎭 Ведущие', 'lh:admin:list'))
-        buttons.insert(3, ('👤 Доступы', 'access:admins'))
+        buttons.insert(3, ('🎭 Ведущие', 'lh:admin:list'))
+        buttons.insert(4, ('👤 Доступы', 'access:admins'))
     await target.answer(
         '<b>🛡 ПАНЕЛЬ УПРАВЛЕНИЯ</b>\n\n'
         f'👥 Участников: <b>{total["total"]}</b>\n'
