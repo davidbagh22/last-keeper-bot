@@ -1,4 +1,4 @@
-name: Render Health
+name: Render Probe
 
 on:
   push:
@@ -9,89 +9,48 @@ permissions:
   contents: read
   issues: write
 
-concurrency:
-  group: render-health-main
-  cancel-in-progress: true
-
 jobs:
-  health:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Probe Render and Telegram runtime
+      - name: Probe live service
+        id: probe
         shell: bash
         run: |
           set +e
           URL="https://last-keeper-bot.onrender.com/health"
-          BODY=""
-          ERROR=""
-          OK="false"
-          ATTEMPT=0
+          HTTP_CODE=$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "$URL" 2>/tmp/curl.err)
+          CURL_RC=$?
+          echo "URL=$URL" > /tmp/report.txt
+          echo "HTTP_CODE=$HTTP_CODE" >> /tmp/report.txt
+          echo "CURL_RC=$CURL_RC" >> /tmp/report.txt
+          echo "--- RESPONSE ---" >> /tmp/report.txt
+          cat /tmp/health.json >> /tmp/report.txt 2>/dev/null || true
+          echo >> /tmp/report.txt
+          echo "--- CURL ERROR ---" >> /tmp/report.txt
+          cat /tmp/curl.err >> /tmp/report.txt 2>/dev/null || true
+          echo >> /tmp/report.txt
+          cat /tmp/report.txt
+          if [ "$CURL_RC" -eq 0 ] && grep -q '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/health.json && grep -q '"bot"[[:space:]]*:' /tmp/health.json; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+          fi
 
-          for i in 1 2 3; do
-            ATTEMPT="$i"
-            echo "Attempt $i/3: $URL"
-            BODY=$(curl -fsS --max-time 15 "$URL" 2>/tmp/curl-error.txt)
-            CURL_RC=$?
-            if [ "$CURL_RC" -eq 0 ]; then
-              echo "$BODY"
-              python - "$BODY" <<'PY'
-import json, sys
-body = json.loads(sys.argv[1])
-print(f"status={body.get('status')} bot={body.get('bot')} webhook={body.get('webhook')}")
-raise SystemExit(0 if body.get('status') == 'ok' and body.get('bot') else 1)
-PY
-              if [ "$?" -eq 0 ]; then
-                OK="true"
-                break
-              fi
-              ERROR="Render responded, but Telegram runtime is not ready"
-            else
-              ERROR=$(cat /tmp/curl-error.txt 2>/dev/null || true)
-              echo "$ERROR"
-            fi
-            sleep 5
-          done
-
-          export URL BODY ERROR OK ATTEMPT
-          python - <<'PY'
-import json, os
-raw = os.environ.get('BODY', '')
-try:
-    parsed = json.loads(raw) if raw else None
-except Exception:
-    parsed = raw
-payload = {
-    'url': os.environ.get('URL'),
-    'healthy': os.environ.get('OK') == 'true',
-    'attempt': int(os.environ.get('ATTEMPT') or 0),
-    'response': parsed,
-    'error': os.environ.get('ERROR') or None,
-}
-with open('runtime_status.json', 'w', encoding='utf-8') as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2)
-print(json.dumps(payload, ensure_ascii=False, indent=2))
-PY
-          echo "HEALTH_OK=$OK" >> "$GITHUB_ENV"
-
-      - name: Publish diagnostic issue
+      - name: Publish report issue
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          TITLE="Render runtime status"
-          NUMBER=$(gh issue list --state open --search "$TITLE in:title" --json number,title --jq '.[] | select(.title == "Render runtime status") | .number' | head -n1)
-          if [ -n "$NUMBER" ]; then
-            gh issue edit "$NUMBER" --body-file runtime_status.json
-          else
-            gh issue create --title "$TITLE" --body-file runtime_status.json
-          fi
+          gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Render Probe ${GITHUB_SHA}" \
+            --body-file /tmp/report.txt
 
       - name: Require healthy runtime
         if: always()
         shell: bash
         run: |
-          test "${HEALTH_OK:-false}" = "true"
+          test "${{ steps.probe.outputs.healthy }}" = "true"
