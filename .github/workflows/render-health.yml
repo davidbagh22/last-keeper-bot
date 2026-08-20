@@ -11,11 +11,11 @@ permissions:
 jobs:
   health:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Wait for Render service and verify Telegram runtime
+      - name: Probe Render and Telegram runtime
         shell: bash
         run: |
           set +e
@@ -25,22 +25,18 @@ jobs:
           OK="false"
           ATTEMPT=0
 
-          for i in $(seq 1 30); do
+          for i in 1 2 3; do
             ATTEMPT="$i"
-            echo "Attempt $i/30: $URL"
-            BODY=$(curl -fsS --max-time 20 "$URL" 2>/tmp/curl-error.txt)
+            echo "Attempt $i/3: $URL"
+            BODY=$(curl -fsS --max-time 15 "$URL" 2>/tmp/curl-error.txt)
             CURL_RC=$?
             if [ "$CURL_RC" -eq 0 ]; then
               echo "$BODY"
               python - "$BODY" <<'PY'
 import json, sys
 body = json.loads(sys.argv[1])
-status = body.get('status')
-bot = body.get('bot')
-print(f"status={status} bot={bot} webhook={body.get('webhook')}")
-if status == 'ok' and bot:
-    raise SystemExit(0)
-raise SystemExit(1)
+print(f"status={body.get('status')} bot={body.get('bot')} webhook={body.get('webhook')}")
+raise SystemExit(0 if body.get('status') == 'ok' and body.get('bot') else 1)
 PY
               if [ "$?" -eq 0 ]; then
                 OK="true"
@@ -51,7 +47,7 @@ PY
               ERROR=$(cat /tmp/curl-error.txt 2>/dev/null || true)
               echo "$ERROR"
             fi
-            sleep 15
+            sleep 5
           done
 
           export URL BODY ERROR OK ATTEMPT
@@ -73,7 +69,6 @@ with open('/tmp/runtime_status.json', 'w', encoding='utf-8') as f:
     json.dump(payload, f, ensure_ascii=False, indent=2)
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
-
           echo "HEALTH_OK=$OK" >> "$GITHUB_ENV"
 
       - name: Publish runtime status branch
@@ -93,7 +88,4 @@ PY
         if: always()
         shell: bash
         run: |
-          if [ "${HEALTH_OK:-false}" != "true" ]; then
-            echo "Render/Telegram runtime is not healthy"
-            exit 1
-          fi
+          test "${HEALTH_OK:-false}" = "true"
