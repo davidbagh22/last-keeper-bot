@@ -1,0 +1,1 @@
+Force Render to redeploy the repaired free-tier configuration on 2026-08-20.
