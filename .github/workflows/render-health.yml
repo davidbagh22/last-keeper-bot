@@ -3,10 +3,16 @@ name: Render Health
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - runtime_status.json
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: render-health-main
+  cancel-in-progress: true
 
 jobs:
   health:
@@ -14,6 +20,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Probe Render and Telegram runtime
         shell: bash
@@ -65,24 +73,22 @@ payload = {
     'response': parsed,
     'error': os.environ.get('ERROR') or None,
 }
-with open('/tmp/runtime_status.json', 'w', encoding='utf-8') as f:
+with open('runtime_status.json', 'w', encoding='utf-8') as f:
     json.dump(payload, f, ensure_ascii=False, indent=2)
 print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
           echo "HEALTH_OK=$OK" >> "$GITHUB_ENV"
 
-      - name: Publish runtime status branch
+      - name: Publish runtime status
         if: always()
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout --orphan runtime-status
-          git rm -rf . >/dev/null 2>&1 || true
-          cp /tmp/runtime_status.json runtime_status.json
           git add runtime_status.json
-          git commit -m "Update Render runtime status"
-          git push origin HEAD:runtime-status --force
+          git commit -m "Update Render runtime status [skip ci]" || exit 0
+          git pull --rebase origin main
+          git push origin HEAD:main
 
       - name: Require healthy runtime
         if: always()
