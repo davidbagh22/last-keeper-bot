@@ -1,4 +1,4 @@
-name: Render Health Status
+name: Render Wake And Probe
 
 on:
   push:
@@ -7,72 +7,70 @@ on:
 
 permissions:
   contents: read
-  statuses: write
+  issues: write
 
 jobs:
-  probe:
+  wake-and-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Probe live Render service
+      - name: Repeatedly wake Render and verify Telegram runtime
         id: probe
         shell: bash
         run: |
           set +e
           URL="https://last-keeper-bot.onrender.com/health"
-          HTTP_CODE=$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "$URL" 2>/tmp/curl.err)
-          CURL_RC=$?
+          : > /tmp/report.txt
+          echo "URL=$URL" >> /tmp/report.txt
+          echo "Started=$(date -u +%FT%TZ)" >> /tmp/report.txt
+          HEALTHY=false
 
-          STATE="failure"
-          DESC="render unreachable"
+          for i in 1 2 3 4 5 6; do
+            echo "" >> /tmp/report.txt
+            echo "=== ATTEMPT $i/6 ===" >> /tmp/report.txt
+            HTTP_CODE=$(curl -sS --max-time 25 -o /tmp/health.json -w '%{http_code}' "$URL" 2>/tmp/curl.err)
+            CURL_RC=$?
+            echo "HTTP_CODE=$HTTP_CODE" >> /tmp/report.txt
+            echo "CURL_RC=$CURL_RC" >> /tmp/report.txt
+            if [ -s /tmp/health.json ]; then
+              echo "RESPONSE:" >> /tmp/report.txt
+              cat /tmp/health.json >> /tmp/report.txt
+              echo >> /tmp/report.txt
+            fi
+            if [ -s /tmp/curl.err ]; then
+              echo "CURL_ERROR:" >> /tmp/report.txt
+              cat /tmp/curl.err >> /tmp/report.txt
+              echo >> /tmp/report.txt
+            fi
 
-          if [ "$CURL_RC" -eq 0 ] && [ -s /tmp/health.json ]; then
-            RESULT=$(python - <<'PY'
-import json
-from pathlib import Path
-try:
-    data = json.loads(Path('/tmp/health.json').read_text(encoding='utf-8'))
-    status = data.get('status')
-    bot = data.get('bot') or '-'
-    err = data.get('error') or '-'
-    ok = status == 'ok' and bot != '-'
-    desc = f"status={status} bot={bot} http=OK"
-    if not ok and err != '-':
-        desc += f" err={err}"
-    print(('success' if ok else 'failure') + '|' + desc[:130])
-except Exception as exc:
-    print('failure|invalid health JSON: ' + str(exc)[:100])
-PY
-)
-            STATE="${RESULT%%|*}"
-            DESC="${RESULT#*|}"
-          else
-            ERR=$(tr '\n' ' ' < /tmp/curl.err 2>/dev/null | cut -c1-80)
-            DESC="curl=${CURL_RC} http=${HTTP_CODE} ${ERR}"
-          fi
+            if [ "$CURL_RC" -eq 0 ] && grep -q '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/health.json 2>/dev/null && grep -q '"bot"[[:space:]]*:' /tmp/health.json 2>/dev/null; then
+              HEALTHY=true
+              echo "RESULT=HEALTHY" >> /tmp/report.txt
+              break
+            fi
+            rm -f /tmp/health.json /tmp/curl.err
+            sleep 5
+          done
 
-          echo "state=$STATE" >> "$GITHUB_OUTPUT"
-          echo "description=$DESC" >> "$GITHUB_OUTPUT"
-          echo "Probe result: $STATE | $DESC"
+          echo "" >> /tmp/report.txt
+          echo "Finished=$(date -u +%FT%TZ)" >> /tmp/report.txt
+          echo "HEALTHY=$HEALTHY" >> /tmp/report.txt
+          cat /tmp/report.txt
+          echo "healthy=$HEALTHY" >> "$GITHUB_OUTPUT"
 
-      - name: Publish readable commit status
+      - name: Publish diagnostic to issue 13
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          STATE: ${{ steps.probe.outputs.state }}
-          DESC: ${{ steps.probe.outputs.description }}
         shell: bash
         run: |
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="${STATE:-failure}" \
-            -f context="render-health" \
-            -f description="${DESC:-probe failed before producing output}"
+          gh issue edit 13 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Render runtime diagnostic" \
+            --body-file /tmp/report.txt
 
       - name: Require healthy runtime
         if: always()
         shell: bash
         run: |
-          test "${{ steps.probe.outputs.state }}" = "success"
+          test "${{ steps.probe.outputs.healthy }}" = "true"
