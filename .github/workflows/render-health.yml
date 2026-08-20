@@ -1,4 +1,4 @@
-name: Render Probe
+name: Render Health Status
 
 on:
   push:
@@ -7,14 +7,14 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  statuses: write
 
 jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Probe live service
+      - name: Probe live Render service
         id: probe
         shell: bash
         run: |
@@ -22,35 +22,57 @@ jobs:
           URL="https://last-keeper-bot.onrender.com/health"
           HTTP_CODE=$(curl -sS --max-time 30 -o /tmp/health.json -w '%{http_code}' "$URL" 2>/tmp/curl.err)
           CURL_RC=$?
-          echo "URL=$URL" > /tmp/report.txt
-          echo "HTTP_CODE=$HTTP_CODE" >> /tmp/report.txt
-          echo "CURL_RC=$CURL_RC" >> /tmp/report.txt
-          echo "--- RESPONSE ---" >> /tmp/report.txt
-          cat /tmp/health.json >> /tmp/report.txt 2>/dev/null || true
-          echo >> /tmp/report.txt
-          echo "--- CURL ERROR ---" >> /tmp/report.txt
-          cat /tmp/curl.err >> /tmp/report.txt 2>/dev/null || true
-          echo >> /tmp/report.txt
-          cat /tmp/report.txt
-          if [ "$CURL_RC" -eq 0 ] && grep -q '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/health.json && grep -q '"bot"[[:space:]]*:' /tmp/health.json; then
-            echo "healthy=true" >> "$GITHUB_OUTPUT"
+
+          STATE="failure"
+          DESC="render unreachable"
+
+          if [ "$CURL_RC" -eq 0 ] && [ -s /tmp/health.json ]; then
+            RESULT=$(python - <<'PY'
+import json
+from pathlib import Path
+try:
+    data = json.loads(Path('/tmp/health.json').read_text(encoding='utf-8'))
+    status = data.get('status')
+    bot = data.get('bot') or '-'
+    err = data.get('error') or '-'
+    ok = status == 'ok' and bot != '-'
+    desc = f"status={status} bot={bot} http=OK"
+    if not ok and err != '-':
+        desc += f" err={err}"
+    print(('success' if ok else 'failure') + '|' + desc[:130])
+except Exception as exc:
+    print('failure|invalid health JSON: ' + str(exc)[:100])
+PY
+)
+            STATE="${RESULT%%|*}"
+            DESC="${RESULT#*|}"
           else
-            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            ERR=$(tr '\n' ' ' < /tmp/curl.err 2>/dev/null | cut -c1-80)
+            DESC="curl=${CURL_RC} http=${HTTP_CODE} ${ERR}"
           fi
 
-      - name: Publish report issue
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
+          echo "description=$DESC" >> "$GITHUB_OUTPUT"
+          echo "Probe result: $STATE | $DESC"
+
+      - name: Publish readable commit status
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.probe.outputs.state }}
+          DESC: ${{ steps.probe.outputs.description }}
         shell: bash
         run: |
-          gh issue create \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Render Probe ${GITHUB_SHA}" \
-            --body-file /tmp/report.txt
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${STATE:-failure}" \
+            -f context="render-health" \
+            -f description="${DESC:-probe failed before producing output}"
 
       - name: Require healthy runtime
         if: always()
         shell: bash
         run: |
-          test "${{ steps.probe.outputs.healthy }}" = "true"
+          test "${{ steps.probe.outputs.state }}" = "success"
