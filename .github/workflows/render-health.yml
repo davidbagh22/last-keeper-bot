@@ -5,20 +5,32 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   health:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
+      - uses: actions/checkout@v4
+
       - name: Wait for Render service and verify Telegram runtime
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           URL="https://last-keeper-bot.onrender.com/health"
-          echo "Checking $URL"
+          BODY=""
+          ERROR=""
+          OK="false"
+          ATTEMPT=0
+
           for i in $(seq 1 30); do
-            echo "Attempt $i/30"
-            if BODY=$(curl -fsS --max-time 20 "$URL" 2>/tmp/curl-error.txt); then
+            ATTEMPT="$i"
+            echo "Attempt $i/30: $URL"
+            BODY=$(curl -fsS --max-time 20 "$URL" 2>/tmp/curl-error.txt)
+            CURL_RC=$?
+            if [ "$CURL_RC" -eq 0 ]; then
               echo "$BODY"
               python - "$BODY" <<'PY'
 import json, sys
@@ -26,15 +38,62 @@ body = json.loads(sys.argv[1])
 status = body.get('status')
 bot = body.get('bot')
 print(f"status={status} bot={bot} webhook={body.get('webhook')}")
-if status != 'ok':
-    raise SystemExit(f"Render responded but Telegram runtime is not ready: {status!r}; error={body.get('error')!r}")
-if not bot:
-    raise SystemExit('Render is up, but bot username is missing')
+if status == 'ok' and bot:
+    raise SystemExit(0)
+raise SystemExit(1)
 PY
-              exit 0
+              if [ "$?" -eq 0 ]; then
+                OK="true"
+                break
+              fi
+              ERROR="Render responded, but Telegram runtime is not ready"
+            else
+              ERROR=$(cat /tmp/curl-error.txt 2>/dev/null || true)
+              echo "$ERROR"
             fi
-            cat /tmp/curl-error.txt || true
             sleep 15
           done
-          echo "Render health endpoint did not become healthy in time"
-          exit 1
+
+          export URL BODY ERROR OK ATTEMPT
+          python - <<'PY'
+import json, os
+raw = os.environ.get('BODY', '')
+try:
+    parsed = json.loads(raw) if raw else None
+except Exception:
+    parsed = raw
+payload = {
+    'url': os.environ.get('URL'),
+    'healthy': os.environ.get('OK') == 'true',
+    'attempt': int(os.environ.get('ATTEMPT') or 0),
+    'response': parsed,
+    'error': os.environ.get('ERROR') or None,
+}
+with open('/tmp/runtime_status.json', 'w', encoding='utf-8') as f:
+    json.dump(payload, f, ensure_ascii=False, indent=2)
+print(json.dumps(payload, ensure_ascii=False, indent=2))
+PY
+
+          echo "HEALTH_OK=$OK" >> "$GITHUB_ENV"
+
+      - name: Publish runtime status branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan runtime-status
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/runtime_status.json runtime_status.json
+          git add runtime_status.json
+          git commit -m "Update Render runtime status"
+          git push origin HEAD:runtime-status --force
+
+      - name: Require healthy runtime
+        if: always()
+        shell: bash
+        run: |
+          if [ "${HEALTH_OK:-false}" != "true" ]; then
+            echo "Render/Telegram runtime is not healthy"
+            exit 1
+          fi
